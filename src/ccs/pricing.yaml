@@ -1,0 +1,78 @@
+# Claude Code Statusline — Multi-Provider Pricing Table
+# 价格单位: 元(CNY) / 百万 tokens
+# 修改后下次 statusline/tracker 调用自动生效
+
+default_currency: CNY
+
+providers:
+  deepseek:
+    # DeepSeek V4-Pro (2.5折优惠至 2026/05/31 23:59 北京时间)
+    # 缓存命中 = 首发价 1/10
+    deepseek-v4-pro:
+      input_per_1m: 3.00
+      input_cache_hit_per_1m: 0.025
+      output_per_1m: 6.00
+
+    # DeepSeek V4-Flash (全系列缓存命中降至首发价 1/10)
+    deepseek-v4-flash:
+      input_per_1m: 1.00
+      input_cache_hit_per_1m: 0.02
+      output_per_1m: 2.00
+
+    # DeepSeek R1 (仅供参考，已整合进 V4-Pro 思考模式)
+    deepseek-r1:
+      input_per_1m: 4.00
+      input_cache_hit_per_1m: 0.25
+      output_per_1m: 16.00
+
+    # DeepSeek V3 / V3.1 (chat模型，V4-Flash 上线后逐步替代)
+    deepseek-chat:
+      input_per_1m: 2.00
+      input_cache_hit_per_1m: 0.50
+      output_per_1m: 8.00
+
+  anthropic:
+    claude-opus-4-7:
+      input_per_1m: 107.73    # $15/1M ≈ ¥107.73
+      cache_write_per_1m: 215.46  # $30/1M
+      cache_read_per_1m: 10.77     # $1.50/1M
+      output_per_1m: 538.65   # $75/1M
+
+    claude-sonnet-4-6:
+      input_per_1m: 21.55     # $3/1M
+      cache_write_per_1m: 43.09    # $6/1M
+      cache_read_per_1m: 2.15      # $0.30/1M
+      output_per_1m: 107.73   # $15/1M
+
+    claude-haiku-4-5:
+      input_per_1m: 7.18      # $1/1M
+      cache_write_per_1m: 14.37     # $2/1M
+      cache_read_per_1m: 0.72       # $0.10/1M
+      output_per_1m: 35.91    # $5/1M
+
+  openai:
+    gpt-4o:
+      input_per_1m: 17.95     # $2.50/1M
+      cache_read_per_1m: 8.98      # $1.25/1M
+      output_per_1m: 71.80    # $10/1M
+
+    gpt-4o-mini:
+      input_per_1m: 1.08      # $0.15/1M
+      cache_read_per_1m: 0.54      # $0.075/1M
+      output_per_1m: 4.31     # $0.60/1M
+
+    gpt-5:
+      input_per_1m: 8.98      # $1.25/1M
+      cache_read_per_1m: 1.80      # $0.25/1M
+      output_per_1m: 71.80    # $10/1M
+
+  google:
+    gemini-2.5-pro:
+      input_per_1m: 8.98      # $1.25/1M
+      cache_read_per_1m: 0.89      # $0.125/1M
+      output_per_1m: 35.91    # $5/1M
+
+    gemini-2.5-flash:
+      input_per_1m: 1.08      # $0.15/1M
+      cache_read_per_1m: 0.11      # $0.015/1M
+      output_per_1m: 4.31     # $0.60/1M
