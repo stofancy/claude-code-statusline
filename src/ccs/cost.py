@@ -88,7 +88,7 @@ def fmt_cost(
     output_price = mp.get("output_per_1m", mp.get("output", 4.0))
     cache_hit_price = mp.get("input_cache_hit_per_1m", mp.get("cache_read_per_1m", input_price * 0.1))
 
-    per_call_total = per_call_cache_read + per_call_input
+    per_call_total = per_call_input + per_call_cache_read
     if per_call_total > 0 and per_call_cache_read > 0:
         ratio = per_call_cache_read / per_call_total
         est_cached = int(total_input_tokens * ratio)
@@ -119,20 +119,22 @@ def fmt_cost_multi(model_breakdown: dict) -> str:
         output_price = mp.get("output_per_1m", mp.get("output", _DEFAULT_PRICING["output_per_1m"]))
         cache_hit_price = mp.get("input_cache_hit_per_1m", mp.get("cache_read_per_1m", input_price * 0.1))
 
-        total_input = usage.get("input", 0) + usage.get("cache_read", 0) + usage.get("cache_write", 0)
+        raw_input = usage.get("input", 0)
         total_output = usage.get("output", 0)
         cache_read = usage.get("cache_read", 0)
+        cache_write = usage.get("cache_write", 0)
 
-        if total_input > 0 and cache_read > 0:
-            ratio = cache_read / total_input
-            est_cached = int(total_input * ratio)
-            est_non_cached = total_input - est_cached
-            total_cost += (_per_1m(input_price, est_non_cached) +
-                           _per_1m(cache_hit_price, est_cached) +
-                           _per_1m(output_price, total_output))
-        else:
-            total_cost += (_per_1m(input_price, total_input) +
-                           _per_1m(output_price, total_output))
+        # raw_input = pc_input = 总输入（含 cache_read，对 DeepSeek 也含 cache_write）
+        # non_cache_input = 未命中缓存的输入（不含 cache_read 的纯 input）
+        non_cache_input = max(0, raw_input - cache_read)
+
+        total_cost += (_per_1m(input_price, non_cache_input) +
+                       _per_1m(cache_hit_price, cache_read) +
+                       _per_1m(output_price, total_output))
+
+        # Anthropic: cache_write 是 input_tokens 之外的额外 token，需单独计费
+        if "cache_write_per_1m" in mp:
+            total_cost += _per_1m(mp["cache_write_per_1m"], cache_write)
 
     return _fmt_cost_val(symbol, total_cost)
 

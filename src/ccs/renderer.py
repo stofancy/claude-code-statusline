@@ -92,6 +92,7 @@ def render(
     cost_str: str,
     last_cost_str: str,
     pred_cost_str: str,
+    pred_output: int,
     session_start_ts: int | None,
     turn_count: int,
     tool_call_count: int,
@@ -110,7 +111,8 @@ def render(
     next_str: str
     if replay_tokens > 0:
         rp_color = _color_for_replay(replay_tokens, ctx_window_size)
-        next_str = f"NEXT {rp_color}{_fmt_tokens(replay_tokens)}{_RESET} [\033[33m{pred_cost_str}{_RESET}]"
+        out_part = f"{_DIM}→{_RESET}{_fmt_tokens(pred_output)}" if pred_output > 0 else ""
+        next_str = f"NEXT {rp_color}{_fmt_tokens(replay_tokens)}{_RESET}{out_part} [\033[33m{pred_cost_str}{_RESET}]"
     else:
         next_str = f"NEXT {_DIM}-{_RESET}"
 

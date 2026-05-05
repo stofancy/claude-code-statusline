@@ -44,7 +44,7 @@ def main() -> None:
     pc_cache_read = cu.get("cache_read_input_tokens", 0) or 0
     pc_cache_write = cu.get("cache_creation_input_tokens", 0) or 0
 
-    per_call_total_input = pc_input + pc_cache_read + pc_cache_write
+    per_call_total_input = pc_input + pc_cache_read
 
     try:
         db.ensure_session(session_id, model_id, model_name)
@@ -87,7 +87,7 @@ def main() -> None:
     agg = db.get_all_totals(session_id)
     cum_input = agg["tot_input_tokens"]
     cum_output = agg["tot_output_tokens"]
-    cum_cache_total = agg["tot_cache_read_tokens"] + agg["tot_cache_write_tokens"]
+    cum_cache_total = agg["tot_cache_read_tokens"]
     tool_call_count = agg["tool_call_count"]
     subagent_total = agg["subagent_total"]
     subagent_running = agg["subagent_running"]
@@ -112,7 +112,7 @@ def main() -> None:
 
     try:
         pred_output = int(pc_output * 1.25)
-        pred_cache = int(replay_tokens * (pc_cache_read / max(pc_cache_read + pc_input, 1)))
+        pred_cache = int(replay_tokens * (pc_cache_read / max(pc_input + pc_cache_read, 1)))
         pred_cost_str = cost_mod.fmt_last_cost(model_id, replay_tokens - pred_cache, pred_output, pred_cache)
     except Exception:
         pred_cost_str = "-"
@@ -128,6 +128,7 @@ def main() -> None:
             cost_str=cost_str,
             last_cost_str=last_cost_str,
             pred_cost_str=pred_cost_str,
+            pred_output=pred_output if pred_cost_str != "-" else 0,
             session_start_ts=session_start_ts,
             turn_count=turn_count,
             tool_call_count=tool_call_count,

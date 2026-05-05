@@ -101,7 +101,7 @@ def estimate_next_replay(
     avg_turn = sum(recent) // max(len(recent), 1) if recent else 0
 
     if latest_call_input > 0:
-        projected = latest_call_input + avg_turn
+        projected = total_input_tokens + latest_call_input
     elif total_input_tokens > 0:
         projected = total_input_tokens
     else:
