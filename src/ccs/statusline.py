@@ -92,15 +92,8 @@ def main() -> None:
     subagent_total = agg["subagent_total"]
     subagent_running = agg["subagent_running"]
 
-    # Cost: per-model pricing, summed across all models in conversation
     try:
-        breakdown = db.get_model_breakdown(session_id)
-        if breakdown:
-            cost_str = cost_mod.fmt_cost_multi(breakdown)
-        else:
-            # Fallback: single-model estimation (backward compat)
-            cost_str = cost_mod.fmt_cost(model_id, cum_input, cum_output,
-                                         pc_cache_read, pc_input)
+        cost_str = cost_mod.fmt_cost_multi(db.get_model_breakdown(session_id))
     except Exception:
         cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"

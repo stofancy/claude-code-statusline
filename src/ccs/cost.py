@@ -1,7 +1,7 @@
 """Multi-provider cost calculation with configurable pricing table.
 
-total_input_tokens includes cache reads (per Anthropic API spec).
-We subtract estimated cache before billing at full input rate.
+All cumulative cost goes through fmt_cost_multi, which uses actual per-model
+token breakdowns from model_usage (not ratio-based estimation).
 """
 
 from pathlib import Path
@@ -73,33 +73,6 @@ def _fmt_cost_val(symbol: str, cost: float) -> str:
         return f"{symbol}{cost:.2f}"
     else:
         return f"{symbol}{cost:.1f}"
-
-
-def fmt_cost(
-    model_id: str,
-    total_input_tokens: int,
-    total_output_tokens: int,
-    per_call_cache_read: int = 0,
-    per_call_input: int = 0,
-) -> str:
-    """Session cumulative cost. Uses latest call's cache ratio for estimation."""
-    mp, _, symbol = _resolve(model_id)
-    input_price = mp.get("input_per_1m", mp.get("input", 1.0))
-    output_price = mp.get("output_per_1m", mp.get("output", 4.0))
-    cache_hit_price = mp.get("input_cache_hit_per_1m", mp.get("cache_read_per_1m", input_price * 0.1))
-
-    per_call_total = per_call_input + per_call_cache_read
-    if per_call_total > 0 and per_call_cache_read > 0:
-        ratio = per_call_cache_read / per_call_total
-        est_cached = int(total_input_tokens * ratio)
-        est_non_cached = total_input_tokens - est_cached
-        cost = (_per_1m(input_price, est_non_cached) +
-                _per_1m(cache_hit_price, est_cached) +
-                _per_1m(output_price, total_output_tokens))
-    else:
-        cost = (_per_1m(input_price, total_input_tokens) +
-                _per_1m(output_price, total_output_tokens))
-    return _fmt_cost_val(symbol, cost)
 
 
 def fmt_cost_multi(model_breakdown: dict) -> str:
