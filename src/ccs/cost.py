@@ -102,6 +102,41 @@ def fmt_cost(
     return _fmt_cost_val(symbol, cost)
 
 
+def fmt_cost_multi(model_breakdown: dict) -> str:
+    """按模型分别定价后加总，返回精确的混合模型累积成本。
+
+    *model_breakdown*: {model_id: {input, output, cache_read, cache_write}, ...}
+    """
+    if not model_breakdown:
+        return "-"
+
+    _, _, symbol = _resolve(next(iter(model_breakdown)) if model_breakdown else "unknown")
+    total_cost = 0.0
+
+    for model_id, usage in model_breakdown.items():
+        mp, _, _ = _resolve(model_id)
+        input_price = mp.get("input_per_1m", mp.get("input", _DEFAULT_PRICING["input_per_1m"]))
+        output_price = mp.get("output_per_1m", mp.get("output", _DEFAULT_PRICING["output_per_1m"]))
+        cache_hit_price = mp.get("input_cache_hit_per_1m", mp.get("cache_read_per_1m", input_price * 0.1))
+
+        total_input = usage.get("input", 0) + usage.get("cache_read", 0) + usage.get("cache_write", 0)
+        total_output = usage.get("output", 0)
+        cache_read = usage.get("cache_read", 0)
+
+        if total_input > 0 and cache_read > 0:
+            ratio = cache_read / total_input
+            est_cached = int(total_input * ratio)
+            est_non_cached = total_input - est_cached
+            total_cost += (_per_1m(input_price, est_non_cached) +
+                           _per_1m(cache_hit_price, est_cached) +
+                           _per_1m(output_price, total_output))
+        else:
+            total_cost += (_per_1m(input_price, total_input) +
+                           _per_1m(output_price, total_output))
+
+    return _fmt_cost_val(symbol, total_cost)
+
+
 def fmt_last_cost(
     model_id: str,
     per_call_input: int,

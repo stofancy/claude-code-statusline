@@ -50,7 +50,8 @@ def main() -> None:
         db.ensure_session(session_id, model_id, model_name)
         db.accumulate(session_id, cur_snapshot_input, cur_snapshot_output,
                       per_call_total_input, pc_output,
-                      pc_cache_read, pc_cache_write)
+                      pc_cache_read, pc_cache_write,
+                      model_id)
     except Exception:
         pass
 
@@ -83,7 +84,7 @@ def main() -> None:
             session_start_ts = int(time.time()) - int(dur_ms / 1000)
 
     # Aggregate ALL sessions (main + subagents) for token/cost totals
-    agg = db.get_all_totals()
+    agg = db.get_all_totals(session_id)
     cum_input = agg["tot_input_tokens"]
     cum_output = agg["tot_output_tokens"]
     cum_cache_total = agg["tot_cache_read_tokens"] + agg["tot_cache_write_tokens"]
@@ -91,10 +92,15 @@ def main() -> None:
     subagent_total = agg["subagent_total"]
     subagent_running = agg["subagent_running"]
 
-    # Cost: pass per-call cache ratio, not cumulative
+    # Cost: per-model pricing, summed across all models in conversation
     try:
-        cost_str = cost_mod.fmt_cost(model_id, cum_input, cum_output,
-                                     pc_cache_read, pc_input)
+        breakdown = db.get_model_breakdown(session_id)
+        if breakdown:
+            cost_str = cost_mod.fmt_cost_multi(breakdown)
+        else:
+            # Fallback: single-model estimation (backward compat)
+            cost_str = cost_mod.fmt_cost(model_id, cum_input, cum_output,
+                                         pc_cache_read, pc_input)
     except Exception:
         cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"

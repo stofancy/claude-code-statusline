@@ -87,8 +87,8 @@ Claude Code statusline tick → ccs-statusline
 |------|-----------|---------|
 | `statusline.py` | `ccs-statusline` | Read stdin JSON + SQLite → render ANSI |
 | `tracker.py` | `ccs-tracker` | Hook event collector → persist to SQLite |
-| `db.py` | — | SQLite schema, accumulate, CRUD, cleanup |
-| `cost.py` | — | Multi-provider pricing with YAML config |
+| `db.py` | — | SQLite schema (4 tables), accumulate (双层), CRUD, cleanup |
+| `cost.py` | — | Multi-provider pricing, `fmt_cost_multi` per-model cost summation |
 | `transcript.py` | — | JSONL parsing, turn counting, replay estimation |
 | `renderer.py` | — | 256-color bars, token formatting, 2-line layout |
 | `util.py` | — | Shared stdin JSON reader |
@@ -96,13 +96,13 @@ Claude Code statusline tick → ccs-statusline
 
 ### How True Cumulative Values Are Tracked
 
-Claude Code's `context_window.total_input_tokens` can decrease due to context compaction. We detect when this snapshot changes (new API call occurred) and add the full per-call input (`input_tokens + cache_read + cache_write`) to cumulative counters in SQLite. This gives accurate totals even across compactions.
+双层追踪：`sessions` 表存储聚合总数用于显示，`model_usage` 表按模型独立追踪。每层使用独立的 snapshot 检测——当 `total_input_tokens` 变化时累加 per-call token 到累积计数器。模型层级的独立 snapshot 避免了主会话与子代理不同上下文之间 snapshot 值振荡导致的误检测。
 
 ### How Subagents Are Aggregated
 
-Subagent processes are separate Claude Code instances with their own session IDs. We share a `conversation_id` via `~/.claude/statusline/.conv_id`, which is inherited by subagent processes. All sessions with the same `conversation_id` are aggregated. Different conversations (or projects) get different IDs, preventing cross-contamination.
+Claude Code 官方文档确认：子代理与主会话**共享同一个 `session_id`**，仅通过额外的 `agent_id` 字段区分。因此所有 hook 事件（PostToolUse、SubagentStart/Stop、statusline tick）天然归入同一会话行，无需外部链接机制。
 
-Subagents may use different models (e.g. `deepseek-v4-flash` for subagent vs `deepseek-v4-pro` for main). Each session tracks its model independently for correct per-model pricing.
+子代理可能使用不同模型（如 `deepseek-v4-flash` vs `deepseek-v4-pro[1m]`）。`model_usage` 表按模型独立追踪 token + snapshot，`fmt_cost_multi()` 按模型分别定价后加总，确保混合模型场景下的精确成本。
 
 ### How Cache Ratio Works
 
@@ -136,9 +136,10 @@ This typically matches DeepSeek's dashboard-reported ~97%+ hit rate.
 
 Location: `~/.claude/statusline/usage.db` (SQLite, WAL mode).
 
-- **sessions**: Cumulative token totals, turn counts, tool/subagent counters per session
-- **tool_calls**: Individual tool call records
-- **subagent_events**: Subagent start/stop events
+- **sessions**: 会话元数据、聚合令牌/轮次/工具/子代理计数器
+- **model_usage**: 按 `(session_id, model_id)` 分解的 token 追踪，独立 snapshot 检测，用于精确按模型成本计算
+- **tool_calls**: 工具调用记录
+- **subagent_events**: 子代理启动/停止事件
 
 Sessions older than 30 days (no updates) are auto-cleaned. Delete `usage.db` to reset all data.
 
