@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Claude Code 的自定义状态行工具，为非 Anthropic 提供商（DeepSeek、OpenAI、Gemini）优化。提供双行 ANSI 显示，包含准确的成本计算、令牌指标、缓存效率跟踪和子代理聚合。
+Claude Code 的自定义状态行工具，支持多提供商（DeepSeek、Anthropic、OpenAI、Gemini）。提供双行 ANSI 显示，基于 JSONL transcript 解析精确 token 统计，避免 stdin snapshot diff 机制因 context compaction 导致的振荡和重复计数。
 
 ## 构建与开发命令
 
@@ -40,26 +40,32 @@ python -m pytest tests/
 
 ```
 Claude Code hooks  ──stdin JSON──→ ccs-tracker ──→ SQLite (~/.claude/statusline/usage.db)
-Claude Code statusline tick ──stdin JSON + SQLite──→ ccs-statusline ──stdout──→ 终端 ANSI 显示
+
+Claude Code statusline tick ──stdin JSON──→ ccs-statusline
+  ├── JSONL transcript ──→ 解析 message.usage → 去重 → 按模型分组 → 写入 SQLite
+  ├── subagents/agent-*.jsonl ──→ 聚合子代理 token
+  └── stdout ──→ 终端 ANSI 显示
 ```
 
 ### 模块职责
 
-- **`statusline.py`** — 编排管道：解析 stdin JSON → 与上次快照比较以检测新 API 调用 → 累积到 SQLite → 解析转录本以估算重播 → 按 conversation_id 汇总所有会话 → 计算成本 → 渲染
-- **`tracker.py`** — 将 `ccs-tracker --event <stop|tool|subagent-start|subagent-stop>` 分派到 db.py 写入。在处理程序分派之前，退出码始终为 0（即使出现异常）以防止 hook 错误。
-- **`db.py`** — 位于 `~/.claude/statusline/usage.db` 的 SQLite（WAL 模式）。四张表：`sessions`（会话元数据、聚合令牌/轮次/子代理计数器、工具计数）、`model_usage`（按模型分解的 token 追踪，独立 snapshot 检测）、`tool_calls`、`subagent_events`。关键设计：官方文档确认子代理与主会话共享 `session_id`，所有 hook 事件天然归入同一会话行，无需外部子代理链接机制。
-- **`cost.py`** — 多提供商定价。解析链：`~/.claude/statusline/pricing.yaml` → 内置 `pricing.yaml` → 后备默认值。支持 `input_per_1m`、`cache_read_per_1m`、`output_per_1m` 键。模型 ID 通过去除 `[1m]` 后缀和尾随版本号进行规范化。
-- **`transcript.py`** — 解析 JSONL 转录本文件（通过 mtime 缓存）以估算下一轮重播令牌和轮次计数。使用粗略的 `len(text)/3.5` 令牌估计。如果转录本路径不可用，则回退到 `latest_call_input`。
-- **`renderer.py`** — 纯 ANSI 渲染。64 级健康渐变色（绿→黄→橙→红），用于上下文压力条和缓存命中率。双行输出，由 `│` 分隔符分隔，粗体/暗色着色，人类可读的令牌/持续时间格式。
+- **`statusline.py`** — 编排管道：解析 stdin JSON → `get_session_metrics()` 解析 JSONL transcript → `update_session_tokens()` 写入 SQLite → `get_all_totals()` / `get_model_breakdown()` 读取 → 成本计算 → 渲染。保留 stdin `current_usage` 用于 LAST cost 和 NEXT replay 估算。
+- **`tracker.py`** — 将 `ccs-tracker --event <stop|tool|subagent-start|subagent-stop>` 分派到 db.py 写入。退出码始终为 0（即使出现异常）以防止 hook 错误。
+- **`db.py`** — 位于 `~/.claude/statusline/usage.db` 的 SQLite（WAL 模式）。四张表：`sessions`（会话元数据、聚合令牌/轮次/子代理计数器）、`model_usage`（按模型分解的 token 追踪）、`tool_calls`、`subagent_events`。`update_session_tokens()` 和 `update_model_usage()` 直接写入 JSONL 解析值，无需 snapshot diff。
+- **`cost.py`** — 多提供商定价。解析链：`~/.claude/statusline/pricing.yaml` → 内置 `pricing.yaml` → 后备默认值。模型 ID 匹配：先精确查找，去除 `[1m]` 后缀，逐段剥离尾部版本号。`fmt_cost_multi()` 按模型分别定价加总；`fmt_last_cost()` 处理 per-call 成本（含 Anthropic cache_write）。
+- **`transcript.py`** — JSONL transcript 解析核心。`get_session_metrics()`：过滤含 `message.usage` 的条目，连续去重（user 消息打断链），按 `message.model` 分组统计，聚合子代理 `agent-*.jsonl`，检测 `compact_boundary` 压缩标记。`estimate_next_replay()`：基于转录本估算下一轮重播令牌（保留用于 NEXT 显示）。
+- **`renderer.py`** — 纯 ANSI 渲染。64 级健康渐变色（绿→黄→橙→红），用于 CTX 压力条和 CACHE 命中率。双行输出，`│` 分隔符，粗体/暗色着色。CACHE 百分比 = `cache_read / (input + cache_read)`（标准缓存命中率 0-100%）。TURNS 显示 `cN` 标记压缩次数。
 - **`util.py`** — 从 stdin 读取 JSON 的共享辅助函数。
 
 ### 关键行为
 
-**累积（db.py:accumulate）：** 双层累积架构。(1) 会话层级（`sessions` 表）：当 `total_input_tokens` 快照与 `last_snapshot` 不同时，检测新 API 调用并累加到聚合计数器，用于显示。(2) 模型层级（`model_usage` 表）：每个模型独立维护 snapshot 和计数器，避免主会话/子代理不同上下文之间的 snapshot 振荡导致的重复计数，同时为 `fmt_cost_multi()` 提供精确的按模型定价数据。
+**Token 统计（transcript.py:get_session_metrics）：** 从 JSONL transcript 直接解析所有 API 调用的 `message.usage`，不受 context compaction 影响（compact 只插入标记，不删除旧条目）。去重策略：连续条目 usage 四元组相同且之间无 user 消息 → 保留最后一条（去除 streaming 重复）。按 `message.model` 分组，支持多模型混合会话的精确统计。
 
-**成本计算（cost.py:fmt_cost_multi）：** 按模型分别定价后加总，解决旧 `fmt_cost` 用单一模型定价混合 token 的问题。从 `model_usage` 表获取每模型分解用量，对 pro/flash 等不同模型使用各自定价，求和得到精确累积成本。`fmt_last_cost` 保留用于 per-call 精确成本。
+**子代理聚合（transcript.py:_subagent_metrics）：** 扫描 `{session_id}/subagents/agent-*.jsonl`，每个子代理独立解析后合并到主指标。子代理模型可能与主会话不同（如 flash vs pro），各模型独立追踪、独立计价。
 
-**会话聚合（db.py:get_all_totals）：** 通过 `conversation_id` 隔离不同对话（并发 Claude Code 实例互不干扰）。子代理与主会话共享 `session_id`（官方文档确认），因此同一对话的所有统计天然聚合到同一行，无需外部链接机制。
+**成本计算（cost.py:fmt_cost_multi）：** 从 `model_usage` 表获取每模型分解用量，分别定价后加总。JSONL 的 `input` 已是纯非缓存输入，无需减法拆解。Anthropic 提供商的 `cache_write` 独立计费。`fmt_last_cost` 使用 stdin `current_usage` 计算最近一次调用的精确成本。
+
+**会话聚合（db.py:get_all_totals）：** 通过 `conversation_id` 隔离不同对话。子代理与主会话共享 `session_id`，同一对话的所有统计聚合到同一行。
 
 **下一个重播估计（transcript.py:estimate_next_replay）：** 将最近轮次大小的平均值投影到最新调用输入上，以预测下一次重播成本。对上下文窗口进行比率检查以进行颜色编码（绿色 <50%，黄色 <80%，红色 ≥80%）。
 
