@@ -47,9 +47,23 @@ def _resolve_price(model_id: str) -> dict:
     mp = _find_model_price(model_id, pricing)
     if mp:
         return mp
-    stripped = model_id.replace("[1m]", "").rstrip("-0123456789.")
-    mp = _find_model_price(stripped, pricing)
-    return mp or _DEFAULT_PRICING
+
+    # 去除 [1m] 后缀（DeepSeek 上下文窗口标记）
+    stripped = model_id.replace("[1m]", "")
+    if stripped != model_id:
+        mp = _find_model_price(stripped, pricing)
+        if mp:
+            return mp
+
+    # 逐段剥离尾部版本号（如 -20251001、-4-7）
+    parts = stripped.split("-")
+    while len(parts) > 1:
+        parts.pop()
+        mp = _find_model_price("-".join(parts), pricing)
+        if mp:
+            return mp
+
+    return _DEFAULT_PRICING
 
 
 def _resolve(model_id: str) -> tuple[dict, str, str]:
@@ -97,9 +111,8 @@ def fmt_cost_multi(model_breakdown: dict) -> str:
         cache_read = usage.get("cache_read", 0)
         cache_write = usage.get("cache_write", 0)
 
-        # raw_input = pc_input = 总输入（含 cache_read，对 DeepSeek 也含 cache_write）
-        # non_cache_input = 未命中缓存的输入（不含 cache_read 的纯 input）
-        non_cache_input = max(0, raw_input - cache_read)
+        # JSONL 的 input 已经是纯非缓存输入（不含 cache_read）
+        non_cache_input = raw_input
 
         total_cost += (_per_1m(input_price, non_cache_input) +
                        _per_1m(cache_hit_price, cache_read) +
@@ -117,16 +130,20 @@ def fmt_last_cost(
     per_call_input: int,
     per_call_output: int,
     per_call_cache_read: int,
+    per_call_cache_write: int = 0,
 ) -> str:
     """Cost of the most recent turn using exact per-call values."""
     mp, _, symbol = _resolve(model_id)
-    input_price = mp.get("input_per_1m", mp.get("input", 1.0))
-    output_price = mp.get("output_per_1m", mp.get("output", 4.0))
+    input_price = mp.get("input_per_1m", mp.get("input", _DEFAULT_PRICING["input_per_1m"]))
+    output_price = mp.get("output_per_1m", mp.get("output", _DEFAULT_PRICING["output_per_1m"]))
     cache_hit_price = mp.get("input_cache_hit_per_1m", mp.get("cache_read_per_1m", input_price * 0.1))
 
     cost = (_per_1m(input_price, per_call_input) +
             _per_1m(cache_hit_price, per_call_cache_read) +
             _per_1m(output_price, per_call_output))
+
+    if "cache_write_per_1m" in mp:
+        cost += _per_1m(mp["cache_write_per_1m"], per_call_cache_write)
 
     if cost < 0.0001:
         return f"{symbol}0"

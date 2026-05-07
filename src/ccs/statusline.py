@@ -34,7 +34,6 @@ def main() -> None:
     ctx = data.get("context_window", {})
 
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
-    cur_snapshot_output = ctx.get("total_output_tokens", 0) or 0
     ctx_pct = ctx.get("used_percentage")
     ctx_size = ctx.get("context_window_size", 1_000_000) or 1_000_000
 
@@ -48,12 +47,12 @@ def main() -> None:
 
     try:
         db.ensure_session(session_id, model_id, model_name)
-        db.accumulate(session_id, cur_snapshot_input, cur_snapshot_output,
-                      per_call_total_input, pc_output,
-                      pc_cache_read, pc_cache_write,
-                      model_id)
+        metrics = tx_mod.get_session_metrics(transcript_path)
+        db.update_session_tokens(session_id, metrics)
+        db.update_model_usage(session_id, metrics.get("model_usage", {}))
+        compaction_count = metrics.get("compaction_count", 0)
     except Exception:
-        pass
+        compaction_count = 0
 
     # Replay estimation
     try:
@@ -99,7 +98,7 @@ def main() -> None:
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"
 
     try:
-        last_cost_str = cost_mod.fmt_last_cost(model_id, pc_input, pc_output, pc_cache_read)
+        last_cost_str = cost_mod.fmt_last_cost(model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
     except Exception:
         last_cost_str = "-"
 
@@ -127,6 +126,7 @@ def main() -> None:
             tool_call_count=tool_call_count,
             subagent_total=subagent_total,
             subagent_running=subagent_running,
+            compaction_count=compaction_count,
             ctx_window_size=ctx_size,
         )
         print(output)

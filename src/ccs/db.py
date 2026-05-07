@@ -117,73 +117,36 @@ def ensure_session(sid: str, model_id: str = "", model_name: str = "") -> None:
         c.close()
 
 
-def accumulate(
-    sid: str,
-    total_input: int,
-    total_output: int,
-    per_call_input: int,
-    per_call_output: int,
-    per_call_cache_read: int,
-    per_call_cache_write: int,
-    model_id: str = "",
-) -> None:
-    """累加 token 到会话和按模型两个层级。
-
-    会话层级（sessions 表）：聚合显示用，保持向后兼容。
-    模型层级（model_usage 表）：每模型独立 snapshot 检测，用于精确成本计算。
-    """
+def update_session_tokens(sid: str, metrics: dict) -> None:
+    """直接将 JSONL 解析的精确 token 值写入 sessions 表。"""
     c = _conn()
     try:
         now = int(time.time())
-
-        # --- 会话层级累加 ---
-        row = c.execute(
-            "SELECT last_snapshot, tot_input_tokens, tot_output_tokens, tot_cache_read_tokens, tot_cache_write_tokens FROM sessions WHERE session_id=?",
-            (sid,),
-        ).fetchone()
-
-        last_snap = row[0] if row else 0
-        cum_in = (row[1] or 0) if row else 0
-        cum_out = (row[2] or 0) if row else 0
-        cum_cr = (row[3] or 0) if row else 0
-        cum_cw = (row[4] or 0) if row else 0
-
-        if total_input != last_snap:
-            cum_in += per_call_input
-            cum_out += per_call_output
-            cum_cr += per_call_cache_read
-            cum_cw += per_call_cache_write
-
         c.execute("""UPDATE sessions SET
-            tot_input_tokens=?, tot_output_tokens=?, tot_cache_read_tokens=?, tot_cache_write_tokens=?,
-            turn_count=CASE WHEN ? != ? THEN turn_count+1 ELSE turn_count END,
-            last_snapshot=?, last_updated=? WHERE session_id=?""",
-                  (cum_in, cum_out, cum_cr, cum_cw, total_input, last_snap, total_input, now, sid))
+            tot_input_tokens=?, tot_output_tokens=?,
+            tot_cache_read_tokens=?, tot_cache_write_tokens=?,
+            turn_count=?, last_updated=?
+            WHERE session_id=?""",
+                  (metrics.get("input", 0), metrics.get("output", 0),
+                   metrics.get("cache_read", 0), metrics.get("cache_write", 0),
+                   metrics.get("turn_count", 0), now, sid))
+        c.commit()
+    finally:
+        c.close()
 
-        # --- 模型层级累加（独立 snapshot） ---
-        if model_id:
-            mrow = c.execute(
-                "SELECT last_snapshot, tot_input_tokens, tot_output_tokens, tot_cache_read_tokens, tot_cache_write_tokens FROM model_usage WHERE session_id=? AND model_id=?",
-                (sid, model_id),
-            ).fetchone()
 
-            m_last = mrow[0] if mrow else 0
-            m_in = (mrow[1] or 0) if mrow else 0
-            m_out = (mrow[2] or 0) if mrow else 0
-            m_cr = (mrow[3] or 0) if mrow else 0
-            m_cw = (mrow[4] or 0) if mrow else 0
-
-            if total_input != m_last:
-                m_in += per_call_input
-                m_out += per_call_output
-                m_cr += per_call_cache_read
-                m_cw += per_call_cache_write
-
+def update_model_usage(sid: str, model_usage: dict) -> None:
+    """直接写入按模型分解的 token 值到 model_usage 表。"""
+    c = _conn()
+    try:
+        now = int(time.time())
+        for model_id, m in model_usage.items():
             c.execute("""INSERT OR REPLACE INTO model_usage
-                (session_id, model_id, tot_input_tokens, tot_output_tokens, tot_cache_read_tokens, tot_cache_write_tokens, last_snapshot, last_updated)
+                (session_id, model_id, tot_input_tokens, tot_output_tokens,
+                 tot_cache_read_tokens, tot_cache_write_tokens, last_snapshot, last_updated)
                 VALUES (?,?,?,?,?,?,?,?)""",
-                      (sid, model_id, m_in, m_out, m_cr, m_cw, total_input, now))
-
+                      (sid, model_id, m.get("input", 0), m.get("output", 0),
+                       m.get("cache_read", 0), m.get("cache_write", 0), 0, now))
         c.commit()
     finally:
         c.close()

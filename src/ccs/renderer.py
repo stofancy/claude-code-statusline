@@ -98,6 +98,7 @@ def render(
     tool_call_count: int,
     subagent_total: int,
     subagent_running: int,
+    compaction_count: int = 0,
     ctx_window_size: int = 1_000_000,
 ) -> str:
     ctx_pct = ctx_pct or 0
@@ -123,11 +124,15 @@ def render(
     row1 = f"{model_str} {sep} {ctx_str} {sep} {next_str} {sep} {cost_d} {sep} {last_d}"
 
     # Row 2: TURNS │ IN │ OUT │ CACHE XX.XXX% amount │ TOOLS │ AGENTS │ duration
-    turn_str = f"{_DIM}TURNS{_RESET} {_BOLD}{turn_count}{_RESET}"
+    if compaction_count > 0:
+        turn_str = f"{_DIM}TURNS{_RESET} {_BOLD}{turn_count}{_RESET}{_DIM}c{compaction_count}{_RESET}"
+    else:
+        turn_str = f"{_DIM}TURNS{_RESET} {_BOLD}{turn_count}{_RESET}"
     in_str = f"{_DIM}IN{_RESET} {_BOLD}{_fmt_tokens(total_input)}{_RESET}"
     out_str = f"{_DIM}OUT{_RESET} {_BOLD}{_fmt_tokens(total_output)}{_RESET}"
 
-    cache_rate = (cache_read * 100 / total_input) if total_input > 0 else 0
+    total_with_cache = total_input + cache_read
+    cache_rate = (cache_read * 100 / total_with_cache) if total_with_cache > 0 else 0
     cache_color = _health_color(100 - cache_rate)
     cache_str = f"{_DIM}CACHE{_RESET} {cache_color}{cache_rate:.3f}%{_RESET} {_fmt_tokens(cache_read)}"
 
