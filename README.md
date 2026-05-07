@@ -25,6 +25,8 @@ DeepSeek-V4-Pro │ CTX ▓▓▓░░░░░ 38% │ NEXT 248.000k→150 [¥
 TURNS 47c2 │ IN 512.384k │ OUT 84.030k │ CACHE 96.351% 13.376M │ TOOLS 63 │ AGENTS 2/1r │ 57m35s
 ```
 
+![Claude Code Statusline demo](docs/screenshot.png)
+
 **Row 1:** Model name · context pressure (64-level gradient bar + %) · replay estimate with predicted cost · session cumulative cost · last-turn cost
 
 **Row 2:** Turn count (`cN` = N compactions) · non-cache input tokens · output tokens · cache hit rate + absolute · tool calls · subagents (total/running) · session duration
