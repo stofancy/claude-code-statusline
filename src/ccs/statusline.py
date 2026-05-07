@@ -34,7 +34,7 @@ def main() -> None:
     ctx = data.get("context_window", {})
 
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
-    ctx_pct = ctx.get("used_percentage")
+    snapshot_pct = ctx.get("used_percentage")
     ctx_size = ctx.get("context_window_size", 1_000_000) or 1_000_000
 
     cu = ctx.get("current_usage") or {}
@@ -52,20 +52,29 @@ def main() -> None:
         db.update_model_usage(session_id, metrics.get("model_usage", {}))
         compaction_count = metrics.get("compaction_count", 0)
     except Exception:
+        metrics = {}
         compaction_count = 0
 
-    # Replay estimation
+    # CTX: 优先使用 transcript 解析的 context_len，fallback 到 snapshot
+    tx_context_len = metrics.get("context_len", 0)
+    if tx_context_len > 0:
+        ctx_pct = tx_context_len / ctx_size * 100
+    else:
+        ctx_pct = snapshot_pct
+
+    # Replay estimation: 用 transcript context_len 替代 snapshot total_input_tokens
     try:
         replay_info = tx_mod.estimate_next_replay(
             transcript_path,
             latest_call_input=per_call_total_input,
             total_input_tokens=cur_snapshot_input,
             ctx_window_size=ctx_size,
+            current_context_len=tx_context_len,
         )
         replay_tokens = replay_info.get("estimated_tokens", 0)
         transcript_turns = replay_info.get("turn_count", 0)
     except Exception:
-        replay_tokens = per_call_total_input or 0
+        replay_tokens = per_call_total_input or tx_context_len or 0
         transcript_turns = 0
 
     session = {}

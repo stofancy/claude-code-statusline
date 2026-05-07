@@ -3,6 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
+[**English**](README.md) | [中文](README.zh.md)
+
 Production-grade custom statusline for [Claude Code](https://code.claude.com) optimised for **multi-provider** usage (DeepSeek, Anthropic, OpenAI, Gemini). Dual-line ANSI display with accurate cost calculation, JSONL-transcript-based token metrics, cache hit rate, compaction detection, and subagent aggregation.
 
 ## Why
@@ -28,6 +30,34 @@ TURNS 47c2 │ IN 512.384k │ OUT 84.030k │ CACHE 96.351% 13.376M │ TOOLS 6
 **Row 2:** Turn count (`cN` = N compactions) · non-cache input tokens · output tokens · cache hit rate + absolute · tool calls · subagents (total/running) · session duration
 
 Colour rules: green → yellow → red for context pressure (0–100%); green → yellow → red for cache health (inverted — high hit rate is green). 256-colour 64-level ANSI ramp.
+
+### Metrics Reference
+
+**Row 1** — context + cost:
+
+| Field | Example | Meaning |
+|-------|---------|---------|
+| `MODEL` | `DeepSeek-V4-Pro` | Current model display name |
+| `CTX ▓▓░░ 38%` | `CTX ▓▓▓░░░░░ 38%` | Context window pressure from transcript `context_len` (most recent API call total tokens). Immune to compaction reset. Green <50%, Yellow 50–80%, Red >80% |
+| `NEXT` | `248.000k→150 [¥0.014]` | Estimated next-turn context = current `context_len` + avg per-turn growth delta. → projected output [predicted cost]. Yellow at >50%, red at >80% |
+| `TOTAL` | `¥0.80` | Session cumulative cost. Summed from per-model breakdown, each priced at its own rate |
+| `LAST` | `¥0.012` | Cost of the most recent API call. Uses stdin `current_usage`, not cumulative |
+
+**Row 2** — session statistics:
+
+| Field | Example | Meaning |
+|-------|---------|---------|
+| `TURNS` | `47c2` | Turn count. `cN` suffix = N context compactions occurred. No suffix = zero compactions |
+| `IN` | `512.384k` | Total non-cache input tokens. Parsed from JSONL transcript, immune to compaction resets |
+| `OUT` | `84.030k` | Total output tokens across all API calls |
+| `CACHE` | `96.351% 13.376M` | Cache hit rate + absolute cache read tokens. Formula: `cache_read / (input + cache_read)`. Inverted colour—higher rate = greener |
+| `TOOLS` | `63` | Tool call count (includes failures from `PostToolUseFailure` hook) |
+| `AGENTS` | `2/1r` | Subagent events: total spawned / currently running (`r` suffix). Hides running count when zero |
+| Duration | `57m35s` | Elapsed session time from `started_at` |
+
+**CACHE note**: The percentage uses JSONL-parsed cache_read vs input, not snapshot values. Non-cache input (`IN`) excludes cache_read to avoid double-counting.
+
+**NEXT estimation**: Adds average per-turn context growth delta (computed from successive API calls' `input+cache_read` totals in the transcript) to the current `context_len`. Falls back to snapshot accumulation when no transcript exists. Colour warning: yellow at >50% of context window, red at >80%.
 
 ## Quick Start
 
@@ -74,6 +104,13 @@ All prices in **CNY (¥)** per million tokens.
 DeepSeek V4-Pro 2.5× discount valid until 2026/05/31 23:59 Beijing time. Update `pricing.yaml` when it changes.
 
 If you use USD-based providers, convert their prices to CNY and override via user pricing file, or set `default_currency: USD` and update provider prices accordingly.
+
+## Documentation
+
+Detailed documentation available in both languages:
+
+- **English**: [Architecture](docs/en/architecture.md) · [Installation](docs/en/installation.md) · [Configuration](docs/en/configuration.md)
+- **中文**: [架构](docs/zh/architecture.md) · [安装](docs/zh/installation.md) · [配置](docs/zh/configuration.md)
 
 ## Architecture
 

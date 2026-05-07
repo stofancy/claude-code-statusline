@@ -266,11 +266,57 @@ def get_session_metrics(transcript_path: str) -> dict:
     return metrics
 
 
+def _deduped_usage_events(events: list[dict]) -> list[dict]:
+    """返回去重后的 usage 事件列表，与 get_session_metrics 使用相同策略。"""
+    deduped = []
+    prev_usage_tuple = None
+    seen_user_since_last_usage = True
+    for e in events:
+        if e.get("type") == "user":
+            seen_user_since_last_usage = True
+            continue
+        usage = e.get("message", {}).get("usage")
+        if not isinstance(usage, dict):
+            continue
+        curr = (usage.get("input_tokens"), usage.get("output_tokens"),
+                usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens"))
+        if not seen_user_since_last_usage and curr == prev_usage_tuple:
+            deduped[-1] = e
+            prev_usage_tuple = curr
+            continue
+        seen_user_since_last_usage = False
+        prev_usage_tuple = curr
+        deduped.append(e)
+    return deduped
+
+
+def _context_growth_deltas(events: list[dict]) -> list[int]:
+    """计算连续 API 调用间总上下文 token 的增量。
+
+    每次 API 调用的总上下文 = input_tokens + cache_read_input_tokens。
+    返回相邻调用间的正增量列表，取最近 10 个值。
+    """
+    deduped = _deduped_usage_events(events)
+    total_lens = []
+    for e in deduped:
+        u = e.get("message", {}).get("usage", {})
+        total = (u.get("input_tokens", 0) or 0) + (u.get("cache_read_input_tokens", 0) or 0)
+        total_lens.append(total)
+
+    deltas = []
+    for i in range(1, len(total_lens)):
+        d = total_lens[i] - total_lens[i - 1]
+        if d > 0:
+            deltas.append(d)
+    return deltas[-10:]
+
+
 def estimate_next_replay(
     transcript_path: str | None,
     latest_call_input: int = 0,
     total_input_tokens: int = 0,
     ctx_window_size: int = 1_000_000,
+    current_context_len: int = 0,
 ) -> dict:
     events = parse_transcript(transcript_path)
     recent = recent_turn_sizes(events, n=5) if events else []
@@ -278,8 +324,16 @@ def estimate_next_replay(
     turns = count_turns(events) if events else 0
     avg_turn = sum(recent) // max(len(recent), 1) if recent else 0
 
-    if latest_call_input > 0:
+    if current_context_len > 0 and events:
+        deltas = _context_growth_deltas(events)
+        avg_growth = sum(deltas) // max(len(deltas), 1) if deltas else 0
+        growth = max(avg_growth, latest_call_input) if latest_call_input > 0 else (
+            avg_growth or latest_call_input or avg_turn)
+        projected = current_context_len + growth
+    elif latest_call_input > 0 and total_input_tokens > 0:
         projected = total_input_tokens + latest_call_input
+    elif latest_call_input > 0:
+        projected = latest_call_input
     elif total_input_tokens > 0:
         projected = total_input_tokens
     else:

@@ -1,0 +1,211 @@
+# Claude Code Statusline
+
+[English](README.md) | **中文**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+
+面向 **多提供商**（DeepSeek、Anthropic、OpenAI、Gemini）优化的 [Claude Code](https://code.claude.com) 生产级自定义状态行。双行 ANSI 显示，支持精确成本计算、基于 JSONL transcript 的 token 统计、缓存命中率、压缩检测和子代理聚合。
+
+## 为什么需要这个工具
+
+Claude Code 内置的 `cost.total_cost_usd` 假定使用 Anthropic USD 定价。如果你使用 DeepSeek（¥/CNY）、Gemini 或 OpenAI，内置成本数据毫无意义。更关键的是，`context_window.total_input_tokens` 在每次 context compaction 后会重置，使得增量 snapshot-diff 累积变得不可靠。本工具：
+
+- 直接解析 Claude Code **磁盘上的 JSONL transcript**，获取权威 token 计数
+- 使用 **实际提供商定价表** 计算成本（多币种、按模型）
+- 将 **缓存命中率** 显示为标准的 0–100% 指标
+- 检测并显示 **压缩次数**（TURNS 上的 `cN` 后缀）
+- 估算 **下一轮重播令牌数**，在上下文溢出前发出预警
+- 将 **子代理 transcript token**（来自 `subagents/agent-*.jsonl`）聚合到主会话
+
+## 显示效果
+
+```
+DeepSeek-V4-Pro │ CTX ▓▓▓░░░░░ 38% │ NEXT 248.000k→150 [¥0.014] │ TOTAL ¥0.80 │ LAST ¥0.012
+TURNS 47c2 │ IN 512.384k │ OUT 84.030k │ CACHE 96.351% 13.376M │ TOOLS 63 │ AGENTS 2/1r │ 57m35s
+```
+
+**第一行：** 模型名称 · 上下文压力（64 级渐变色条 + 百分比）· 重播估算及预测成本 · 会话累计成本 · 上一轮成本
+
+**第二行：** 轮次计数（`cN` = N 次压缩）· 非缓存输入令牌 · 输出令牌 · 缓存命中率 + 绝对值 · 工具调用次数 · 子代理（总计/运行中）· 会话持续时间
+
+颜色规则：上下文压力 0–100% 采用绿 → 黄 → 红渐变；缓存健康度同样使用绿 → 黄 → 红（反色——命中率高为绿色）。256 色 64 级 ANSI 色阶。
+
+### 指标释义
+
+**第一行** — 上下文 + 成本：
+
+| 字段 | 示例 | 含义 |
+|------|------|------|
+| `MODEL` | `DeepSeek-V4-Pro` | 当前模型名称 |
+| `CTX ▓▓░░ 38%` | `CTX ▓▓▓░░░░░ 38%` | 上下文压力。基于 transcript `context_len`（最近一次 API 调用总令牌数）计算，不受 compaction 重置影响。绿 <50%，黄 50–80%，红 >80% |
+| `NEXT` | `248.000k→150 [¥0.014]` | 预计下一轮上下文 = 当前 `context_len` + 平均每轮增长增量。→ 预估输出 [预测成本]。超过 50% 变黄，超过 80% 变红 |
+| `TOTAL` | `¥0.80` | 会话累计成本。按模型分别计价后加总 |
+| `LAST` | `¥0.012` | 最近一次 API 调用的精确成本。使用 stdin 的 `current_usage`，非累计值 |
+
+**第二行** — 会话统计：
+
+| 字段 | 示例 | 含义 |
+|------|------|------|
+| `TURNS` | `47c2` | 轮次数。`cN` 后缀 = N 次 context compaction。无后缀 = 零压缩 |
+| `IN` | `512.384k` | 总非缓存输入令牌。从 JSONL transcript 解析，不受压缩重置影响 |
+| `OUT` | `84.030k` | 所有 API 调用的总输出令牌 |
+| `CACHE` | `96.351% 13.376M` | 缓存命中率 + 缓存读取令牌绝对值。公式：`cache_read / (input + cache_read)`。反色——命中率越高越绿 |
+| `TOOLS` | `63` | 工具调用次数（含 `PostToolUseFailure` 钩子记录的失败调用） |
+| `AGENTS` | `2/1r` | 子代理事件：总启动数 / 当前运行数（`r` 后缀）。无运行中时只显示总数 |
+| 持续时间 | `57m35s` | 会话已用时间，从 `started_at` 时间戳计算 |
+
+**CACHE 说明**：百分比使用 JSONL 解析的 cache_read 与 input 计算，而非 snapshot 值。非缓存输入（`IN`）已排除 cache_read，避免重复计数。
+
+**NEXT 估算逻辑**：取转录中最近几轮（最近 5 个 user→assistant 周期）的平均大小，投射到最新 API 调用的输入上。通过半切分比率检测增长趋势（稳定/上升/下降）。当 `estimated_tokens / ctx_window_size` 超过 50% 变黄，超过 80% 变红作为溢出预警。
+
+## 快速开始
+
+```bash
+git clone https://github.com/stofancy/claude-code-statusline.git
+cd claude-code-statusline
+bash install.sh
+```
+
+或通过 pip 安装：
+
+```bash
+pip install git+https://github.com/stofancy/claude-code-statusline.git
+```
+
+然后将 hook + statusline 配置合并到 `~/.claude/settings.json`（参见 `examples/settings.json`）。重启 Claude Code。
+
+## 环境要求
+
+- Python 3.11+
+- `pyyaml`（自动安装）
+- SQLite3（标准库自带）
+
+## 定价
+
+内置定价表位于 `src/ccs/pricing.yaml`。可通过 `~/.claude/statusline/pricing.yaml` 覆盖。
+
+所有价格均以 **CNY（¥）** 每百万 token 计。
+
+| 提供商 | 模型 | 输入 | 缓存命中 | 缓存写入 | 输出 |
+|----------|-------|-------|-----------|-------------|--------|
+| DeepSeek | V4-Pro（2.5× 优惠） | 3.00 | 0.025 | — | 6.00 |
+| DeepSeek | V4-Flash | 1.00 | 0.02 | — | 2.00 |
+| DeepSeek | R1 | 4.00 | 0.25 | — | 16.00 |
+| Anthropic | Opus 4.7 | 107.73 | 10.77 | 215.46 | 538.65 |
+| Anthropic | Sonnet 4.6 | 21.55 | 2.15 | 43.09 | 107.73 |
+| Anthropic | Haiku 4.5 | 7.18 | 0.72 | 14.37 | 35.91 |
+| OpenAI | GPT-4o | 17.95 | 8.98 | — | 71.80 |
+| OpenAI | GPT-4o-mini | 1.08 | 0.54 | — | 4.31 |
+| OpenAI | GPT-5 | 8.98 | 1.80 | — | 71.80 |
+| Google | Gemini 2.5 Pro | 8.98 | 0.89 | — | 35.91 |
+| Google | Gemini 2.5 Flash | 1.08 | 0.11 | — | 4.31 |
+
+DeepSeek V4-Pro 2.5× 折扣有效期至北京时间 2026/05/31 23:59。到期后请更新 `pricing.yaml`。
+
+如果你使用基于 USD 的提供商，可将其价格转换为人民币并通过用户定价文件覆盖，或设置 `default_currency: USD` 并相应更新各提供商的价格。
+
+## 架构
+
+```
+                        ┌─ Stop hook ───────────────────┐
+                        ├─ PostToolUse ─── ccs-tracker ──┤
+                        ├─ SubagentStart ── (hook events) ├── SQLite
+                        └─ SubagentStop ─────────────────┘  (tool calls, subagent events)
+
+Claude Code statusline tick (every 15s) → ccs-statusline
+  ├── stdin JSON ─── model, cost, context_window, transcript_path
+  ├── JSONL transcript ─── parse message.usage entries → dedup → per-model aggregation
+  ├── subagents/agent-*.jsonl ─── aggregate subagent token usage
+  ├── SQLite ─── write parsed values to sessions + model_usage tables
+  └── stdout ─── 2-line ANSI text
+```
+
+### 模块
+
+| 文件 | CLI 入口 | 用途 |
+|------|-----------|---------|
+| `statusline.py` | `ccs-statusline` | 编排：stdin → transcript → DB → 渲染 |
+| `tracker.py` | `ccs-tracker` | Hook 事件收集器 → 持久化到 SQLite |
+| `db.py` | — | SQLite 模式（4 张表）、直接写入、CRUD、清理 |
+| `cost.py` | — | 多提供商定价、按模型成本加总、模型 ID 解析 |
+| `transcript.py` | — | JSONL 解析、去重、token 统计、子代理聚合、重播估算 |
+| `renderer.py` | — | 256 色条、token 格式化、双行布局 |
+| `util.py` | — | 共享 stdin JSON 读取器 |
+| `pricing.yaml` | — | 可配置的提供商定价表 |
+
+### Token 统计原理
+
+Token 统计数据**直接从 Claude Code 的 JSONL transcript 读取**——这是每次 API 调用的权威记录。这避免了 snapshot-diff 累积的三个问题：
+
+1. **压缩振荡**：`total_input_tokens` 在压缩后重置，导致上下文回填期间每次 tick 都产生虚假的"新调用"。JSONL 条目是不可变的——压缩会插入 `compact_boundary` 标记，但不会删除历史条目。
+2. **多调用合并**：15 秒 tick 间隔内的多次 API 调用被合并为一次累积。JSONL 则记录每次调用的独立数据。
+3. **cache_read 重复计数**：公式 `per_call_total_input = input + cache_read` 会夸大输入。JSONL 将 `input_tokens`（非缓存）与 `cache_read_input_tokens`（缓存命中）分开记录。
+
+**去重策略**：`(input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens)` 四元组完全相同的连续 usage 条目视为流式重复——每个组中只保留最后一条。用户消息会打断连续链，防止跨轮次误去重。
+
+### 子代理聚合方式
+
+Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件中（位于主 transcript 所在的同一会话目录）。这些文件使用相同的 JSONL 格式，并以相同方式解析。
+
+子代理通常使用不同的模型（例如子代理使用 `deepseek-v4-flash`，主会话使用 `deepseek-v4-pro`）。每个模型的 token 被独立追踪并按各自费率定价——混合模型会话产生准确的累计成本。
+
+## 配置
+
+### Hook 事件
+
+| Hook | 用途 |
+|------|---------|
+| `Stop` | 轮次边界标记 |
+| `PostToolUse` | 统计工具调用次数 |
+| `PostToolUseFailure` | 统计失败的工具调用次数 |
+| `SubagentStart` | 追踪子代理启动 |
+| `SubagentStop` | 追踪子代理完成 |
+
+### 环境变量
+
+| 变量 | 用途 |
+|----------|---------|
+| `CCS_DEBUG=1` | 将原始 hook 数据写入 `~/.claude/statusline/debug.log` |
+
+## 数据库
+
+位置：`~/.claude/statusline/usage.db`（SQLite，WAL 模式）。
+
+| 表 | 内容 |
+|-------|----------|
+| `sessions` | 会话元数据、累计 token 计数器、轮次计数、工具/子代理计数器 |
+| `model_usage` | 按 `(session_id, model_id)` 细分的 token 数据，用于精确成本计算 |
+| `tool_calls` | 每轮工具调用记录 |
+| `subagent_events` | 子代理启动/停止事件 |
+
+超过 30 天未更新的会话会自动清理。删除 `usage.db` 可重置所有累计数据。
+
+## 故障排除
+
+| 现象 | 解决方法 |
+|---------|-----|
+| 状态行未显示 | 检查 `~/.claude/settings.json` 中的 `statusLine` 配置，重启 Claude Code |
+| 成本显示 `-` | 检查 `pricing.yaml` 是否存在；验证模型 ID 是否匹配定价条目 |
+| NEXT 显示 `-` | 正常——会话早期尚无 transcript；首次响应后即会显示 |
+| CACHE 异常高/低 | 缓存命中率 = `cache_read / (input + cache_read)`；>90% 对 DeepSeek 属于正常 |
+| TURNS 显示 `cN` | 压缩次数——正常，表示上下文被压缩的次数 |
+| 重启后数字异常 | 删除 `usage.db` 重置累计计数器 |
+
+## 兼容性
+
+- Linux（x86_64、aarch64）
+- macOS（Apple Silicon、Intel）
+- Windows（WSL2）
+- 支持 ANSI 的 Windows Terminal
+
+## 详细文档
+
+详见专用文档（中英双语，互相引用）：
+
+- **English**: [Architecture](docs/en/architecture.md) · [Installation](docs/en/installation.md) · [Configuration](docs/en/configuration.md)
+- **中文**: [架构](docs/zh/architecture.md) · [安装](docs/zh/installation.md) · [配置](docs/zh/configuration.md)
+
+## 许可证
+
+MIT
