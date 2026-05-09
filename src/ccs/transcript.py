@@ -129,8 +129,10 @@ def _subagent_metrics(transcript_path: str) -> dict:
 def get_session_metrics(transcript_path: str) -> dict:
     """从 JSONL transcript 解析精确的 session token 统计。
 
-    去重策略：连续条目 usage 四元组相同 → 只保留最后一条。
-    按 model 字段分组统计，支持多模型会话。
+    去重策略：按 message.id 去重。同一 API 响应的 streaming chunk 和
+    多 tool_use 拆分条目共享同一 message UUID，每个 UUID 只保留最后一条
+    （含最终 usage 值）。此策略可正确处理 multi-tool-call 消息被
+    tool_result 穿插写入 JSONL 的场景。
 
     Returns:
         {input, output, cache_read, cache_write, turn_count, context_len, model_usage}
@@ -164,31 +166,25 @@ def get_session_metrics(transcript_path: str) -> dict:
         _metrics_cache[key] = (mtime, metrics)
         return metrics
 
-    # 去重：只在同一 turn 内连续相同 usage 的条目间去重
-    # 关键：user 消息打断连续链，防止跨 turn 误去重
+    # 去重：按 message.id 去重，同一 UUID 保留最后一条。
+    # 每个 API 调用有唯一 message UUID，streaming chunk 和
+    # 被 tool_result 拆分的 multi-tool-call 条目共享同一 UUID。
     deduped = []
-    prev_usage_tuple = None
-    seen_user_since_last_usage = True
+    seen_msg_ids: dict[str, int] = {}
 
     for e in events:
-        if e.get("type") == "user":
-            seen_user_since_last_usage = True
-            continue
-
         usage = e.get("message", {}).get("usage")
         if not isinstance(usage, dict):
             continue
 
-        curr = (usage.get("input_tokens"), usage.get("output_tokens"),
-                usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens"))
+        msg_id = e.get("message", {}).get("id", "")
 
-        if not seen_user_since_last_usage and curr == prev_usage_tuple:
-            deduped[-1] = e  # 替换为同组最后一条
-            prev_usage_tuple = curr
+        if msg_id and msg_id in seen_msg_ids:
+            deduped[seen_msg_ids[msg_id]] = e
             continue
 
-        seen_user_since_last_usage = False
-        prev_usage_tuple = curr
+        if msg_id:
+            seen_msg_ids[msg_id] = len(deduped)
         deduped.append(e)
 
     # 聚合统计
@@ -267,25 +263,19 @@ def get_session_metrics(transcript_path: str) -> dict:
 
 
 def _deduped_usage_events(events: list[dict]) -> list[dict]:
-    """返回去重后的 usage 事件列表，与 get_session_metrics 使用相同策略。"""
+    """返回去重后的 usage 事件列表，按 message.id 去重，保留最后一条。"""
     deduped = []
-    prev_usage_tuple = None
-    seen_user_since_last_usage = True
+    seen_msg_ids: dict[str, int] = {}
     for e in events:
-        if e.get("type") == "user":
-            seen_user_since_last_usage = True
-            continue
         usage = e.get("message", {}).get("usage")
         if not isinstance(usage, dict):
             continue
-        curr = (usage.get("input_tokens"), usage.get("output_tokens"),
-                usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens"))
-        if not seen_user_since_last_usage and curr == prev_usage_tuple:
-            deduped[-1] = e
-            prev_usage_tuple = curr
+        msg_id = e.get("message", {}).get("id", "")
+        if msg_id and msg_id in seen_msg_ids:
+            deduped[seen_msg_ids[msg_id]] = e
             continue
-        seen_user_since_last_usage = False
-        prev_usage_tuple = curr
+        if msg_id:
+            seen_msg_ids[msg_id] = len(deduped)
         deduped.append(e)
     return deduped
 

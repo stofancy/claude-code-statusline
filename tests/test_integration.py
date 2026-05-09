@@ -1,10 +1,9 @@
-"""集成测试：子代理共享 session_id 的完整流水线。
+"""集成测试：完整流水线与 transcript 解析。
 
-Run: .venv/bin/python tests/test_integration.py
+Run: python -m pytest tests/test_integration.py -v
 """
 
 import sys
-import time
 import tempfile
 from pathlib import Path
 
@@ -24,7 +23,7 @@ def reset_state(tmpdir: Path):
 
 
 def test_statusline_pipeline():
-    """完整流水线：主会话 token 累积 + 子代理事件共享 session_id。"""
+    """完整流水线：session token 写入 + 子代理事件 + 工具调用。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
@@ -34,18 +33,20 @@ def test_statusline_pipeline():
 
         db.ensure_session(sid, "deepseek-v4-pro", "DeepSeek V4 Pro")
 
-        # 第一轮 API 调用
-        db.accumulate(sid, 10000, 500, 10000, 500, 8000, 1000)
+        # 第一轮：写入 token 数据
+        db.update_session_tokens(sid, {
+            "input": 10000, "output": 500, "cache_read": 8000, "cache_write": 1000,
+            "turn_count": 3,
+        })
         agg = db.get_all_totals(sid)
         assert agg["tot_input_tokens"] == 10000
+        assert agg["tot_cache_read_tokens"] == 8000
 
-        # 同一快照不重复
-        db.accumulate(sid, 10000, 500, 7000, 300, 6000, 500)
-        agg = db.get_all_totals(sid)
-        assert agg["tot_input_tokens"] == 10000
-
-        # 第二轮
-        db.accumulate(sid, 18000, 900, 8000, 400, 7000, 300)
+        # 第二轮：覆盖写入
+        db.update_session_tokens(sid, {
+            "input": 18000, "output": 900, "cache_read": 7000, "cache_write": 300,
+            "turn_count": 6,
+        })
         agg = db.get_all_totals(sid)
         assert agg["tot_input_tokens"] == 18000
 
@@ -76,17 +77,23 @@ def test_concurrent_sessions_isolated():
         db.init_db()
 
         db.ensure_session("session-A", "model-A", "Model A")
-        db.accumulate("session-A", 10000, 100, 10000, 100, 5000, 50)
+        db.update_session_tokens("session-A", {
+            "input": 10000, "output": 100, "cache_read": 5000, "cache_write": 50,
+            "turn_count": 2,
+        })
 
         db.ensure_session("session-B", "model-B", "Model B")
-        db.accumulate("session-B", 3000, 30, 3000, 30, 1000, 10)
+        db.update_session_tokens("session-B", {
+            "input": 3000, "output": 30, "cache_read": 1000, "cache_write": 10,
+            "turn_count": 1,
+        })
 
         assert db.get_all_totals("session-A")["tot_input_tokens"] == 10000
         assert db.get_all_totals("session-B")["tot_input_tokens"] == 3000
 
 
 def test_resume_preserves_and_continues():
-    """恢复保留数据并继续累加。"""
+    """恢复保留数据并继续更新。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
@@ -94,21 +101,25 @@ def test_resume_preserves_and_continues():
 
         sid = "resume-sid-42"
         db.ensure_session(sid, "test", "Test")
-        db.accumulate(sid, 1000, 100, 1000, 100, 500, 50)
+        db.update_session_tokens(sid, {
+            "input": 1000, "output": 100, "cache_read": 500, "cache_write": 50,
+            "turn_count": 1,
+        })
 
         db._known_sessions.clear()
         db.ensure_session(sid, "test", "Test")
-        db.accumulate(sid, 1500, 220, 900, 120, 600, 80)
+        db.update_session_tokens(sid, {
+            "input": 1500, "output": 220, "cache_read": 600, "cache_write": 80,
+            "turn_count": 2,
+        })
 
         s = db.get_session(sid)
-        assert s["tot_input_tokens"] == 1900
+        assert s["tot_input_tokens"] == 1500
         assert s["tot_output_tokens"] == 220
 
 
 def test_multi_model_cost_accuracy():
     """混合模型成本精确计算：pro + flash 分别定价后加总。"""
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from ccs import cost as cost_mod
 
     with tempfile.TemporaryDirectory() as td:
@@ -119,12 +130,10 @@ def test_multi_model_cost_accuracy():
         sid = "multi-model-test"
         db.ensure_session(sid, "deepseek-v4-pro", "DeepSeek V4 Pro")
 
-        # 主会话 pro 模型
-        db.accumulate(sid, 100000, 10000, 100000, 10000, 80000, 5000,
-                      "deepseek-v4-pro[1m]")
-        # 子代理 flash 模型
-        db.accumulate(sid, 50000, 5000, 50000, 5000, 40000, 3000,
-                      "deepseek-v4-flash")
+        db.update_model_usage(sid, {
+            "deepseek-v4-pro[1m]": {"input": 100000, "output": 10000, "cache_read": 80000, "cache_write": 5000},
+            "deepseek-v4-flash": {"input": 50000, "output": 5000, "cache_read": 40000, "cache_write": 3000},
+        })
 
         breakdown = db.get_model_breakdown(sid)
         assert "deepseek-v4-pro[1m]" in breakdown
@@ -132,12 +141,63 @@ def test_multi_model_cost_accuracy():
 
         # 按模型分别算成本后加总
         multi_cost = cost_mod.fmt_cost_multi(breakdown)
+        assert multi_cost, "cost string should not be empty"
 
-        # 旧方式：用最后一个 tick 的模型定价所有 token（会偏）
-        old_cost = cost_mod.fmt_cost("deepseek-v4-flash", 150000, 15000)
-        # 显然不同
-        assert multi_cost != old_cost, \
-            f"Multi-model cost should differ from single-model: {multi_cost} vs {old_cost}"
+        # 验证两种模型分别计价产生的成本不同
+        pro_only = {"deepseek-v4-pro[1m]": breakdown["deepseek-v4-pro[1m]"]}
+        flash_only = {"deepseek-v4-flash": breakdown["deepseek-v4-flash"]}
+        assert cost_mod.fmt_cost_multi(pro_only) != cost_mod.fmt_cost_multi(flash_only), \
+            "Pro and Flash should have different pricing"
+
+
+def test_transcript_dedup_by_message_id():
+    """按 message.id 去重：同一 UUID 只计一次，即使被 tool_result 隔开。"""
+    import json
+    import tempfile
+    import os
+    from ccs import transcript as tx_mod
+
+    tx_mod._metrics_cache.clear()
+    tx_mod._cache.clear()
+
+    # 构造模拟 JSONL：同一 message UUID 出现多次，
+    # 中间夹杂 user 消息（模拟 multi-tool-call 被 tool_result 拆分）
+    msg_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    lines = [
+        # streaming dup 1
+        {"type": "assistant", "message": {"id": msg_id, "model": "test-model",
+         "usage": {"input_tokens": 5000, "output_tokens": 100, "cache_read_input_tokens": 2000}}},
+        # streaming dup 2（同 UUID 连续，应保留最后一条）
+        {"type": "assistant", "message": {"id": msg_id, "model": "test-model",
+         "usage": {"input_tokens": 5000, "output_tokens": 100, "cache_read_input_tokens": 2000}}},
+        # tool_result（user type 打断连续链）
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+        # 同 UUID 再次出现（旧逻辑会被误认为新 API 调用）
+        {"type": "assistant", "message": {"id": msg_id, "model": "test-model",
+         "usage": {"input_tokens": 5000, "output_tokens": 100, "cache_read_input_tokens": 2000}}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+        # 又一次
+        {"type": "assistant", "message": {"id": msg_id, "model": "test-model",
+         "usage": {"input_tokens": 5000, "output_tokens": 100, "cache_read_input_tokens": 2000}}},
+        # 另一条不同的 API 调用（不同 UUID）
+        {"type": "assistant", "message": {"id": "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz", "model": "test-model",
+         "usage": {"input_tokens": 1000, "output_tokens": 50}}},
+    ]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        for obj in lines:
+            f.write(json.dumps(obj) + "\n")
+        tmp_path = f.name
+
+    try:
+        metrics = tx_mod.get_session_metrics(tmp_path)
+        # 去重后应只有 2 条不同 API 调用的 token，不是 4 条
+        assert metrics["input"] == 6000, \
+            f"Expected 6000 (5000+1000), got {metrics['input']}"
+        assert metrics["output"] == 150, \
+            f"Expected 150 (100+50), got {metrics['output']}"
+    finally:
+        os.unlink(tmp_path)
 
 
 if __name__ == "__main__":
@@ -146,6 +206,7 @@ if __name__ == "__main__":
         test_concurrent_sessions_isolated,
         test_resume_preserves_and_continues,
         test_multi_model_cost_accuracy,
+        test_transcript_dedup_by_message_id,
     ]
 
     passed = 0

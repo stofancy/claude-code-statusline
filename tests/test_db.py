@@ -1,8 +1,8 @@
-"""Tests for db.py session lifecycle and token aggregation.
+"""Tests for db.py session lifecycle and token persistence.
 
 子代理与主会话共享 session_id（官方文档确认），本测试验证该行为。
 
-Run: .venv/bin/python tests/test_db.py
+Run: python -m pytest tests/test_db.py -v
 """
 
 import sys
@@ -40,14 +40,17 @@ def test_ensure_session_new():
 
 
 def test_ensure_session_resume():
-    """同一 session_id 多次调用: 保留数据，更新模型，重置 is_stale。"""
+    """同一 session_id 多次调用：保留数据，更新模型，重置 is_stale。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
         db.init_db()
 
         db.ensure_session("resume-sid", "old-model", "Old")
-        db.accumulate("resume-sid", 1000, 100, 1000, 100, 500, 50)
+        db.update_session_tokens("resume-sid", {
+            "input": 1000, "output": 100, "cache_read": 500, "cache_write": 50,
+            "turn_count": 3,
+        })
         db.record_tool_call("resume-sid", "Read")
 
         # 模拟被标记 stale
@@ -67,8 +70,7 @@ def test_ensure_session_resume():
 
 
 def test_subagent_shares_session_id():
-    """子代理与主会话共享 session_id: record_subagent_start/stop
-    更新的是同一个 session 行的计数器。"""
+    """子代理与主会话共享 session_id：计数器在同一行更新。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
@@ -95,38 +97,44 @@ def test_two_sessions_isolated():
         db.ensure_session("session-A", "pro", "Pro")
         db.ensure_session("session-B", "flash", "Flash")
 
-        db.accumulate("session-A", 5000, 100, 5000, 100, 3000, 200)
-        db.accumulate("session-B", 1000, 50, 1000, 50, 500, 30)
+        db.update_session_tokens("session-A", {
+            "input": 5000, "output": 100, "cache_read": 3000, "cache_write": 200,
+            "turn_count": 1,
+        })
+        db.update_session_tokens("session-B", {
+            "input": 1000, "output": 50, "cache_read": 500, "cache_write": 30,
+            "turn_count": 1,
+        })
 
         assert db.get_all_totals("session-A")["tot_input_tokens"] == 5000
         assert db.get_all_totals("session-B")["tot_input_tokens"] == 1000
 
 
-def test_accumulate_snapshot_detection():
-    """只有 snapshot 变化时才累加 token（去重）。"""
+def test_update_session_tokens_direct_write():
+    """update_session_tokens 直接覆盖写入，不累加。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
         db.init_db()
 
-        db.ensure_session("snap-test", "test", "Test")
+        db.ensure_session("direct-write", "test", "Test")
 
-        db.accumulate("snap-test", 1000, 100, 1000, 100, 800, 50)
-        s = db.get_session("snap-test")
+        db.update_session_tokens("direct-write", {
+            "input": 1000, "output": 100, "cache_read": 800, "cache_write": 0,
+            "turn_count": 5,
+        })
+        s = db.get_session("direct-write")
         assert s["tot_input_tokens"] == 1000
-        assert s["turn_count"] == 1
+        assert s["turn_count"] == 5
 
-        # 同一快照不重复累加
-        db.accumulate("snap-test", 1000, 100, 700, 60, 600, 30)
-        s = db.get_session("snap-test")
-        assert s["tot_input_tokens"] == 1000
-        assert s["turn_count"] == 1
-
-        # 新快照
-        db.accumulate("snap-test", 2500, 220, 1500, 120, 1200, 80)
-        s = db.get_session("snap-test")
+        # 新值直接覆盖，不是累加
+        db.update_session_tokens("direct-write", {
+            "input": 2500, "output": 220, "cache_read": 1200, "cache_write": 0,
+            "turn_count": 10,
+        })
+        s = db.get_session("direct-write")
         assert s["tot_input_tokens"] == 2500
-        assert s["turn_count"] == 2
+        assert s["turn_count"] == 10
 
 
 def test_record_tool_call():
@@ -153,7 +161,10 @@ def test_cleanup_stale():
         db.init_db()
 
         db.ensure_session("old-sid", "old", "Old")
-        db.accumulate("old-sid", 1000, 100, 1000, 100, 500, 50)
+        db.update_session_tokens("old-sid", {
+            "input": 1000, "output": 100, "cache_read": 500, "cache_write": 50,
+            "turn_count": 1,
+        })
 
         c = db._conn()
         old_ts = int(time.time()) - 31 * 86400 - 60
@@ -177,15 +188,17 @@ def test_get_all_totals_unknown_sid():
         assert agg["tot_input_tokens"] == 0
 
 
-def test_accumulate_per_model():
-    """accumulate 带 model_id 写入 model_usage 表。"""
+def test_update_model_usage():
+    """update_model_usage 写入 model_usage 表。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
         db.init_db()
 
         db.ensure_session("sid-1", "pro", "Pro")
-        db.accumulate("sid-1", 10000, 500, 10000, 500, 8000, 1000, "deepseek-v4-pro")
+        db.update_model_usage("sid-1", {
+            "deepseek-v4-pro": {"input": 10000, "output": 500, "cache_read": 8000, "cache_write": 1000},
+        })
 
         c = db._conn()
         row = c.execute(
@@ -197,8 +210,8 @@ def test_accumulate_per_model():
         assert row[2] == 10000  # tot_input_tokens
 
 
-def test_model_snapshot_independent():
-    """不同模型的 snapshot 独立检测，互不干扰。"""
+def test_model_usage_independent():
+    """不同模型的用量独立存储和查询。"""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         reset_state(tdp)
@@ -206,19 +219,19 @@ def test_model_snapshot_independent():
 
         db.ensure_session("sid-1", "pro", "Pro")
 
-        # 主会话 pro 模型第一次调用
-        db.accumulate("sid-1", 10000, 500, 10000, 500, 8000, 1000, "deepseek-v4-pro")
-        # 同一快照不累加
-        db.accumulate("sid-1", 10000, 500, 7000, 300, 6000, 500, "deepseek-v4-pro")
+        db.update_model_usage("sid-1", {
+            "deepseek-v4-pro": {"input": 10000, "output": 500, "cache_read": 8000, "cache_write": 1000},
+            "deepseek-v4-flash": {"input": 5000, "output": 200, "cache_read": 4000, "cache_write": 300},
+        })
 
-        # 子代理 flash 模型第一次调用（不同 snapshot）
-        db.accumulate("sid-1", 5000, 200, 5000, 200, 4000, 300, "deepseek-v4-flash")
-        # 同一快照不累加
-        db.accumulate("sid-1", 5000, 200, 4000, 100, 3000, 200, "deepseek-v4-flash")
+        # 覆写 pro 模型
+        db.update_model_usage("sid-1", {
+            "deepseek-v4-pro": {"input": 15000, "output": 700, "cache_read": 10000, "cache_write": 1200},
+        })
 
         breakdown = db.get_model_breakdown("sid-1")
-        assert breakdown["deepseek-v4-pro"]["input"] == 10000
-        assert breakdown["deepseek-v4-pro"]["cache_read"] == 8000
+        assert breakdown["deepseek-v4-pro"]["input"] == 15000
+        assert breakdown["deepseek-v4-pro"]["cache_read"] == 10000
         assert breakdown["deepseek-v4-flash"]["input"] == 5000
         assert breakdown["deepseek-v4-flash"]["cache_read"] == 4000
 
@@ -243,7 +256,9 @@ def test_model_usage_cleanup_with_session():
         db.init_db()
 
         db.ensure_session("old-sid", "old", "Old")
-        db.accumulate("old-sid", 1000, 100, 1000, 100, 500, 50, "test-model")
+        db.update_model_usage("old-sid", {
+            "test-model": {"input": 1000, "output": 100, "cache_read": 500, "cache_write": 50},
+        })
 
         c = db._conn()
         old_ts = int(time.time()) - 31 * 86400 - 60
@@ -261,12 +276,12 @@ if __name__ == "__main__":
         test_ensure_session_resume,
         test_subagent_shares_session_id,
         test_two_sessions_isolated,
-        test_accumulate_snapshot_detection,
+        test_update_session_tokens_direct_write,
         test_record_tool_call,
         test_cleanup_stale,
         test_get_all_totals_unknown_sid,
-        test_accumulate_per_model,
-        test_model_snapshot_independent,
+        test_update_model_usage,
+        test_model_usage_independent,
         test_get_model_breakdown_empty,
         test_model_usage_cleanup_with_session,
     ]
