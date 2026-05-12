@@ -1,0 +1,11 @@
+CTX: 上下文
+NEXT: 下次
+TOTAL: 总计
+LAST: 上次
+TURNS: 轮次
+IN: 输入
+OUT: 输出
+CACHE: 缓存
+TOOLS: 工具
+AGENTS: 子代理
+WAITING: "ccs: 等待会话数据..."

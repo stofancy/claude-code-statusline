@@ -63,19 +63,39 @@ Colour rules: green → yellow → red for context pressure (0–100%); green �
 
 ## Quick Start
 
+### macOS / Linux
+
 ```bash
 git clone https://github.com/stofancy/claude-code-statusline.git
 cd claude-code-statusline
 bash install.sh
 ```
 
-Or via pip:
+### Windows (PowerShell 7+)
+
+```powershell
+git clone https://github.com/stofancy/claude-code-statusline.git
+cd claude-code-statusline
+pwsh -File install.ps1
+```
+
+The installer creates a venv at `~/.claude/statusline/venv` (uses `Scripts/*.exe` on Windows, `bin/*` on POSIX) and prints a `settings.json` snippet with platform-correct paths. The snippet uses forward-slash `~/` paths because Claude Code invokes hooks through bash, which mangles Windows backslash paths.
+
+### Via pip
 
 ```bash
 pip install git+https://github.com/stofancy/claude-code-statusline.git
 ```
 
 Then merge the hook + statusline configuration into `~/.claude/settings.json` (see `examples/settings.json`). Restart Claude Code.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `CCS_LANG` | UI language — `en` (default) or `zh`. Falls back to `$LANG`/`$LC_ALL` if unset. |
+| `CCS_CURRENCY` | Display currency — `USD`, `CNY`, `EUR`, `GBP`, `JPY`, `AUD`, `INR`, `HKD`, `SGD`, `KRW`, `CAD`, `CHF`, `TWD`. Overrides `display_currency` in `pricing.yaml`. Prices stay in `base_currency` (USD by default) and are converted via the `fx_rates` block. |
+| `CCS_DEBUG` | When `1`, writes hook + cost-resolution debug to `~/.claude/statusline/debug.log`. |
 
 ## Requirements
 

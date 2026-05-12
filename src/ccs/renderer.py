@@ -6,6 +6,8 @@
 
 import time
 
+from .i18n import t
+
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
@@ -107,40 +109,40 @@ def render(
     model_str = f"{_BOLD}{_CYAN}{model_name}{_RESET}"
     ctx_color = _health_color(ctx_pct)
     ctx_bar = _bar(ctx_pct)
-    ctx_str = f"CTX {ctx_bar} {ctx_color}{ctx_pct:.0f}%{_RESET}"
+    ctx_str = f"{t('CTX')} {ctx_bar} {ctx_color}{ctx_pct:.0f}%{_RESET}"
 
     next_str: str
     if replay_tokens > 0:
         rp_color = _color_for_replay(replay_tokens, ctx_window_size)
         out_part = f"{_DIM}→{_RESET}{_fmt_tokens(pred_output)}" if pred_output > 0 else ""
-        next_str = f"NEXT {rp_color}{_fmt_tokens(replay_tokens)}{_RESET}{out_part} [\033[33m{pred_cost_str}{_RESET}]"
+        next_str = f"{t('NEXT')} {rp_color}{_fmt_tokens(replay_tokens)}{_RESET}{out_part} [\033[33m{pred_cost_str}{_RESET}]"
     else:
-        next_str = f"NEXT {_DIM}-{_RESET}"
+        next_str = f"{t('NEXT')} {_DIM}-{_RESET}"
 
-    cost_d = f"{_DIM}TOTAL{_RESET} \033[33m{cost_str}{_RESET}" if cost_str else ""
-    last_d = f"{_DIM}LAST{_RESET} \033[33m{last_cost_str}{_RESET}" if last_cost_str else ""
+    cost_d = f"{_DIM}{t('TOTAL')}{_RESET} \033[33m{cost_str}{_RESET}" if cost_str else ""
+    last_d = f"{_DIM}{t('LAST')}{_RESET} \033[33m{last_cost_str}{_RESET}" if last_cost_str else ""
 
     sep = f"{_DIM}│{_RESET}"
     row1 = f"{model_str} {sep} {ctx_str} {sep} {next_str} {sep} {cost_d} {sep} {last_d}"
 
     # Row 2: TURNS │ IN │ OUT │ CACHE XX.XXX% amount │ TOOLS │ AGENTS │ duration
     if compaction_count > 0:
-        turn_str = f"{_DIM}TURNS{_RESET} {_BOLD}{turn_count}{_RESET}{_DIM}c{compaction_count}{_RESET}"
+        turn_str = f"{_DIM}{t('TURNS')}{_RESET} {_BOLD}{turn_count}{_RESET}{_DIM}c{compaction_count}{_RESET}"
     else:
-        turn_str = f"{_DIM}TURNS{_RESET} {_BOLD}{turn_count}{_RESET}"
-    in_str = f"{_DIM}IN{_RESET} {_BOLD}{_fmt_tokens(total_input)}{_RESET}"
-    out_str = f"{_DIM}OUT{_RESET} {_BOLD}{_fmt_tokens(total_output)}{_RESET}"
+        turn_str = f"{_DIM}{t('TURNS')}{_RESET} {_BOLD}{turn_count}{_RESET}"
+    in_str = f"{_DIM}{t('IN')}{_RESET} {_BOLD}{_fmt_tokens(total_input)}{_RESET}"
+    out_str = f"{_DIM}{t('OUT')}{_RESET} {_BOLD}{_fmt_tokens(total_output)}{_RESET}"
 
     total_with_cache = total_input + cache_read
     cache_rate = (cache_read * 100 / total_with_cache) if total_with_cache > 0 else 0
     cache_color = _health_color(100 - cache_rate)
-    cache_str = f"{_DIM}CACHE{_RESET} {cache_color}{cache_rate:.3f}%{_RESET} {_fmt_tokens(cache_read)}"
+    cache_str = f"{_DIM}{t('CACHE')}{_RESET} {cache_color}{cache_rate:.3f}%{_RESET} {_fmt_tokens(cache_read)}"
 
-    tool_str = f"{_DIM}TOOLS{_RESET} {_MAGENTA}{tool_call_count}{_RESET}"
+    tool_str = f"{_DIM}{t('TOOLS')}{_RESET} {_MAGENTA}{tool_call_count}{_RESET}"
     if subagent_running > 0:
-        agent_str = f"{_DIM}AGENTS{_RESET} {_MAGENTA}{subagent_total}{_RESET}/{_GREEN}{subagent_running}r{_RESET}"
+        agent_str = f"{_DIM}{t('AGENTS')}{_RESET} {_MAGENTA}{subagent_total}{_RESET}/{_GREEN}{subagent_running}r{_RESET}"
     else:
-        agent_str = f"{_DIM}AGENTS{_RESET} {_MAGENTA}{subagent_total}{_RESET}"
+        agent_str = f"{_DIM}{t('AGENTS')}{_RESET} {_MAGENTA}{subagent_total}{_RESET}"
 
     if session_start_ts:
         elapsed = int(time.time()) - session_start_ts

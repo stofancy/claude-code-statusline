@@ -8,6 +8,7 @@ from . import db
 from . import cost as cost_mod
 from . import transcript as tx_mod
 from . import renderer
+from .i18n import t
 from .util import read_stdin_json
 
 
@@ -15,7 +16,7 @@ def main() -> None:
     data = read_stdin_json()
 
     if not data:
-        print("\033[2mccs: waiting for session data...\033[0m")
+        print(f"\033[2m{t('WAITING')}\033[0m")
         sys.exit(0)
 
     try:
