@@ -34,6 +34,14 @@ def main() -> None:
     cost_data = data.get("cost", {})
     ctx = data.get("context_window", {})
 
+    rate_limits = data.get("rate_limits") or {}
+    rl_5h = rate_limits.get("five_hour") or {}
+    rl_7d = rate_limits.get("seven_day") or {}
+    rate_limit_5h = rl_5h.get("used_percentage")
+    rate_limit_5h_resets_at = rl_5h.get("resets_at")
+    rate_limit_7d = rl_7d.get("used_percentage")
+    rate_limit_7d_resets_at = rl_7d.get("resets_at")
+
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
     snapshot_pct = ctx.get("used_percentage")
     ctx_size = ctx.get("context_window_size", 1_000_000) or 1_000_000
@@ -138,6 +146,10 @@ def main() -> None:
             subagent_running=subagent_running,
             compaction_count=compaction_count,
             ctx_window_size=ctx_size,
+            rate_limit_5h=rate_limit_5h,
+            rate_limit_5h_resets_at=rate_limit_5h_resets_at,
+            rate_limit_7d=rate_limit_7d,
+            rate_limit_7d_resets_at=rate_limit_7d_resets_at,
         )
         print(output)
     except Exception as exc:

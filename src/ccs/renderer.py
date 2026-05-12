@@ -66,10 +66,14 @@ def _fmt_duration(seconds: int) -> str:
     elif seconds < 3600:
         m, s = divmod(seconds, 60)
         return f"{m}m{s}s"
-    else:
+    elif seconds < 86400:
         h = seconds // 3600
         m = (seconds % 3600) // 60
         return f"{h}h{m:02d}m"
+    else:
+        d = seconds // 86400
+        h = (seconds % 86400) // 3600
+        return f"{d}d{h:02d}h"
 
 
 def _color_for_replay(tokens: int, ctx_window: int) -> str:
@@ -82,6 +86,32 @@ def _color_for_replay(tokens: int, ctx_window: int) -> str:
         return "\033[33m"
     else:
         return _RED
+
+
+def _fmt_rate_limits_combined(
+    top_label: str,
+    top_pct: float | None,
+    top_resets_at: int | None,
+    bot_label: str,
+    bot_pct: float | None,
+    bot_resets_at: int | None,
+) -> str:
+    """Compact rate-limit segment: `5H 24% 4h57m │ 7D 41% 6d03h`."""
+    now = int(time.time())
+
+    def _val(label: str, pct: float | None, resets_at: int | None) -> str:
+        if pct is None:
+            return f"{_DIM}{label} -{_RESET}"
+        c = _health_color(pct)
+        s = f"{_DIM}{label}{_RESET} {c}{pct:>3.0f}%{_RESET}"
+        if resets_at is not None:
+            rem = resets_at - now
+            if rem > 0:
+                s += f" {_DIM}{_fmt_duration(rem)}{_RESET}"
+        return s
+
+    sep = f"{_DIM}│{_RESET}"
+    return f"{_val(top_label, top_pct, top_resets_at)} {sep} {_val(bot_label, bot_pct, bot_resets_at)}"
 
 
 def render(
@@ -102,6 +132,10 @@ def render(
     subagent_running: int,
     compaction_count: int = 0,
     ctx_window_size: int = 1_000_000,
+    rate_limit_5h: float | None = None,
+    rate_limit_5h_resets_at: int | None = None,
+    rate_limit_7d: float | None = None,
+    rate_limit_7d_resets_at: int | None = None,
 ) -> str:
     ctx_pct = ctx_pct or 0
 
@@ -150,6 +184,16 @@ def render(
     else:
         dur_str = f"{_DIM}-{_RESET}"
 
-    row2 = f"{turn_str} {sep} {in_str} {sep} {out_str} {sep} {cache_str} {sep} {tool_str} {sep} {agent_str} {sep} {dur_str}"
+    row2_parts = [turn_str, in_str, out_str, cache_str, tool_str, agent_str, dur_str]
+
+    if rate_limit_5h is not None or rate_limit_7d is not None:
+        row2_parts.append(
+            _fmt_rate_limits_combined(
+                t("5H"), rate_limit_5h, rate_limit_5h_resets_at,
+                t("7D"), rate_limit_7d, rate_limit_7d_resets_at,
+            )
+        )
+
+    row2 = f" {sep} ".join(row2_parts)
 
     return f"{row1}\n{row2}"
