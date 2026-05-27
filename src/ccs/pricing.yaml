@@ -5,6 +5,7 @@
 #   • DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 #   • OpenAI:    https://openai.com/api/pricing/
 #   • Google:    https://ai.google.dev/gemini-api/docs/pricing
+#   • MiMo:      https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
 #
 # Prices are denominated in `base_currency` (USD by default). Override the
 # *display* currency at runtime with env CCS_CURRENCY (e.g. CCS_CURRENCY=CNY),
@@ -195,3 +196,34 @@ providers:
       input_per_1m: 0.30
       cache_read_per_1m: 0.03
       output_per_1m: 2.50
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Xiaomi MiMo — published in USD (overseas pricing).
+  # https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
+  # V2.5 pricing effective 2026-05-27. Cache write is free (promotional).
+  # ─────────────────────────────────────────────────────────────────────────
+  mimo:
+    mimo-v2.5-pro:
+      input_per_1m: 0.435
+      input_cache_hit_per_1m: 0.0036
+      output_per_1m: 0.87
+
+    mimo-v2.5:
+      input_per_1m: 0.14
+      input_cache_hit_per_1m: 0.0028
+      output_per_1m: 0.28
+
+    mimo-v2-pro:
+      input_per_1m: 0.40
+      input_cache_hit_per_1m: 0.20
+      output_per_1m: 2.00
+
+    mimo-v2-omni:
+      input_per_1m: 0.40
+      input_cache_hit_per_1m: 0.08
+      output_per_1m: 2.00
+
+    mimo-v2-flash:
+      input_per_1m: 0.10
+      input_cache_hit_per_1m: 0.01
+      output_per_1m: 0.30
