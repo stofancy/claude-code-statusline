@@ -3,6 +3,8 @@
 Run: python -m pytest tests/test_integration.py -v
 """
 
+import importlib
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -200,6 +202,226 @@ def test_transcript_dedup_by_message_id():
         os.unlink(tmp_path)
 
 
+def test_per_model_native_currency_display():
+    """CNY 原生模型以 ¥ 显示；默认所有模型按 display_currency (CNY) 显示。
+
+    Verifies the per-model native currency design with the new default
+    ``display_currency: CNY``:
+
+      • MiniMax (currency: CNY) shows ¥ in any config — no FX, no
+        opt-in required.
+      • Anthropic / DeepSeek / MiMo (no ``currency`` field) follow the
+        user's ``display_currency``. With the new CNY default they are
+        FX-converted from USD → CNY and render as ¥.
+      • A model declaring ``currency: USD`` (with multi-currency prices)
+        keeps its display in USD even when the user wants CNY — the
+        model is the authoritative answer for its native currency.
+      • The ``primary_model_id`` parameter keeps ``TOTAL`` and ``LAST``
+        consistent on the same line in mixed breakdowns.
+    """
+    from ccs import cost as cost_mod
+
+    # 1M input + 100K output for each model. Native prices:
+    #   MiniMax-M3: 2.10 CNY input + 0.84 CNY output = 2.94 CNY
+    #   claude-opus-4-7: $5.00 input + $2.50 output = $7.50
+    usage = {"input": 1_000_000, "output": 100_000, "cache_read": 0, "cache_write": 0}
+
+    # Save and restore CCS_CURRENCY so this test is independent of env.
+    saved = os.environ.pop("CCS_CURRENCY", None)
+    try:
+        # ---- Default config (display == CNY) ----
+        importlib.reload(cost_mod)
+        # Default display is now CNY, but MiniMax has explicit `currency: CNY`,
+        # so the per-model native path is taken — no FX.
+        assert "¥2.94" in cost_mod.fmt_cost_multi({"MiniMax-M3": usage}), \
+            "MiniMax alone should display ¥2.94 (per-model native CNY, no FX)"
+        # Anthropic has no `currency` field → target = display = CNY →
+        # FX from USD → CNY: 7.50 × 7.18 = 53.85
+        assert "¥53.85" in cost_mod.fmt_cost_multi({"claude-opus-4-7": usage}), \
+            "Anthropic with default display=CNY should FX to ¥53.85"
+
+        # fmt_last_cost mirrors fmt_cost_multi
+        assert "¥2.94" in cost_mod.fmt_last_cost("MiniMax-M3",
+                                                 usage["input"], usage["output"],
+                                                 usage["cache_read"], usage["cache_write"])
+        assert "¥53.85" in cost_mod.fmt_last_cost("claude-opus-4-7",
+                                                  usage["input"], usage["output"],
+                                                  usage["cache_read"], usage["cache_write"])
+
+        # Mixed breakdown with MiniMax as primary: TOTAL stays in ¥.
+        # 2.94 + (7.50 × 7.18) = 2.94 + 53.85 = 56.79 CNY → "¥56.79"
+        mixed_cny = cost_mod.fmt_cost_multi(
+            {"MiniMax-M3": usage, "claude-opus-4-7": usage},
+            primary_model_id="MiniMax-M3",
+        )
+        assert "¥56.79" in mixed_cny, f"MiniMax-primary mixed should be ¥56.79, got {mixed_cny!r}"
+
+        # Mixed with Anthropic as primary (no `currency` field, target=display=CNY):
+        # both ends land in CNY, total ¥56.79
+        mixed_anth = cost_mod.fmt_cost_multi(
+            {"MiniMax-M3": usage, "claude-opus-4-7": usage},
+            primary_model_id="claude-opus-4-7",
+        )
+        assert "¥56.79" in mixed_anth, f"Anthropic-primary mixed in CNY display: {mixed_anth!r}"
+
+        # ---- User opt-in: CCS_CURRENCY=USD → force USD display, FX all ----
+        os.environ["CCS_CURRENCY"] = "USD"
+        importlib.reload(cost_mod)
+
+        # MiniMax alone: still ¥2.94 (per-model native overrides display)
+        assert "¥2.94" in cost_mod.fmt_cost_multi({"MiniMax-M3": usage})
+
+        # Anthropic alone with display=USD: target=display=USD, no FX, $7.50
+        assert "$7.50" in cost_mod.fmt_cost_multi({"claude-opus-4-7": usage}), \
+            "Anthropic with display=USD should show $7.50 (no FX)"
+
+        # fmt_last_cost also follows display
+        assert "$7.50" in cost_mod.fmt_last_cost("claude-opus-4-7",
+                                                 usage["input"], usage["output"],
+                                                 usage["cache_read"], usage["cache_write"])
+
+        # Mixed with MiniMax primary: TOTAL in ¥ (primary wins)
+        assert "¥56.79" in cost_mod.fmt_cost_multi(
+            {"MiniMax-M3": usage, "claude-opus-4-7": usage},
+            primary_model_id="MiniMax-M3",
+        )
+
+        # Mixed with Anthropic primary and display=USD: FX both to USD
+        # 2.94/7.18 + 7.50 = 0.4095 + 7.50 = 7.91 USD → "$7.91"
+        mixed_usd = cost_mod.fmt_cost_multi(
+            {"MiniMax-M3": usage, "claude-opus-4-7": usage},
+            primary_model_id="claude-opus-4-7",
+        )
+        assert "$" in mixed_usd and "¥" not in mixed_usd, \
+            f"Anthropic-primary + display=USD mixed should be $, got {mixed_usd!r}"
+        assert "7.91" in mixed_usd, f"Expected 7.91 in {mixed_usd!r}"
+
+        # ---- Split between price currency and target display currency ----
+        # A model that declares `currency: CNY` but only ships a `prices:`
+        # block in USD: the cost is computed in USD (the only authoritative
+        # block we have) and FX-converted into CNY for display, so the user
+        # sees ¥ — never a USD value with a ¥ symbol.
+        fake_pricing = {
+            "base_currency": "USD",
+            "display_currency": "CNY",
+            "fx_rates": {"USD": 1.0, "CNY": 7.18},
+            "providers": {
+                "fake": {
+                    "cny-native-only-usd-priced": {
+                        "currency": "CNY",
+                        "prices": {
+                            "USD": {"input_per_1m": 0.30, "output_per_1m": 1.20},
+                        },
+                    },
+                },
+            },
+        }
+        original_load = cost_mod._load_pricing
+        cost_mod._load_pricing = lambda: fake_pricing
+        try:
+            # 1M input + 100K output @ USD prices:
+            #   0.30 + 0.12 = 0.42 USD → FX to CNY: 0.42 × 7.18 = 3.0156 → ¥3.02
+            rendered = cost_mod.fmt_cost_multi(
+                {"cny-native-only-usd-priced": usage},
+                primary_model_id="cny-native-only-usd-priced",
+            )
+            assert "¥" in rendered, f"CNY-native model should display ¥, got {rendered!r}"
+            assert "3.02" in rendered or "3.01" in rendered, \
+                f"expected FX-converted ¥3.02, got {rendered!r}"
+            # And ¥ must be from FX, not a no-op round trip: if FX were
+            # skipped, the value would be $0.42, not ¥3.02.
+            assert "0.42" not in rendered and "0.420" not in rendered, \
+                f"value should be FX-converted to CNY, got {rendered!r}"
+
+            rendered = cost_mod.fmt_last_cost("cny-native-only-usd-priced",
+                                              usage["input"], usage["output"],
+                                              usage["cache_read"], usage["cache_write"])
+            assert "¥" in rendered, f"LAST for CNY-native should be ¥, got {rendered!r}"
+        finally:
+            cost_mod._load_pricing = original_load
+            importlib.reload(cost_mod)
+
+        # ---- USD-native model wins over user display preference ----
+        # A model declaring `currency: USD` keeps its display in USD even
+        # when the user has set `display_currency: CNY`. The model has the
+        # authoritative answer for what currency it is.
+        fake_pricing2 = {
+            "base_currency": "USD",
+            "display_currency": "CNY",
+            "fx_rates": {"USD": 1.0, "CNY": 7.18},
+            "providers": {
+                "fake2": {
+                    "usd-native-multi-currency": {
+                        "currency": "USD",
+                        "prices": {
+                            "USD": {"input_per_1m": 0.50, "output_per_1m": 2.00},
+                            "CNY": {"input_per_1m": 3.59, "output_per_1m": 14.36},
+                        },
+                    },
+                },
+            },
+        }
+        cost_mod._load_pricing = lambda: fake_pricing2
+        try:
+            # 0.50 + 0.20 = 0.70 USD → "$0.700" (USD-native wins)
+            rendered = cost_mod.fmt_cost_multi(
+                {"usd-native-multi-currency": usage},
+                primary_model_id="usd-native-multi-currency",
+            )
+            assert "$0.700" in rendered, f"USD-native model in $: {rendered!r}"
+
+            # Even with display=USD explicit, USD-native model stays in $.
+            os.environ["CCS_CURRENCY"] = "USD"
+            importlib.reload(cost_mod)
+            cost_mod._load_pricing = lambda: fake_pricing2
+            rendered = cost_mod.fmt_cost_multi(
+                {"usd-native-multi-currency": usage},
+                primary_model_id="usd-native-multi-currency",
+            )
+            assert "$" in rendered and "¥" not in rendered, \
+                f"USD-native model should stay $ even with display=USD, got {rendered!r}"
+        finally:
+            cost_mod._load_pricing = original_load
+            os.environ.pop("CCS_CURRENCY", None)
+            importlib.reload(cost_mod)
+
+    finally:
+        if saved is not None:
+            os.environ["CCS_CURRENCY"] = saved
+        else:
+            os.environ.pop("CCS_CURRENCY", None)
+        importlib.reload(cost_mod)
+
+
+def test_cache_suffix_stripping():
+    """[1m] / [1M] / 嵌套后缀都应能命中 MiniMax-M3。
+
+    Real-world: Claude Code may emit ``MiniMax-M3[1M][1m]`` when the
+    1-hour cache variant is requested on top of the default 5-min one.
+    The resolver must strip both case-insensitively and keep stripping
+    until no more ``[1m]`` suffix remains.
+    """
+    from ccs import cost as cost_mod
+
+    usage = {"input": 1_000_000, "output": 100_000, "cache_read": 0, "cache_write": 0}
+
+    # Every variant must resolve to MiniMax-M3 and render ¥ in the
+    # default config (display=CNY, MiniMax has explicit `currency: CNY`).
+    for variant in [
+        "MiniMax-M3",
+        "MiniMax-M3[1m]",
+        "MiniMax-M3[1M]",            # capital M
+        "MiniMax-M3[1M][1m]",          # doubled, capital + lowercase
+        "minimax-m3",                  # all lowercase
+        "minimax-m3[1m]",              # lowercase + suffix
+    ]:
+        rendered = cost_mod.fmt_last_cost(variant,
+                                          usage["input"], usage["output"],
+                                          usage["cache_read"], usage["cache_write"])
+        assert "¥" in rendered, f"{variant!r} should render ¥, got {rendered!r}"
+        assert rendered == "¥2.94", f"{variant!r} should be ¥2.94, got {rendered!r}"
+
+
 if __name__ == "__main__":
     tests = [
         test_statusline_pipeline,
@@ -207,6 +429,8 @@ if __name__ == "__main__":
         test_resume_preserves_and_continues,
         test_multi_model_cost_accuracy,
         test_transcript_dedup_by_message_id,
+        test_per_model_native_currency_display,
+        test_cache_suffix_stripping,
     ]
 
     passed = 0

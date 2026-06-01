@@ -6,13 +6,29 @@
 #   • OpenAI:    https://openai.com/api/pricing/
 #   • Google:    https://ai.google.dev/gemini-api/docs/pricing
 #   • MiMo:      https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
+#   • MiniMax:   https://platform.minimaxi.com/docs/guides/pricing-paygo
 #
-# Prices are denominated in `base_currency` (USD by default). Override the
-# *display* currency at runtime with env CCS_CURRENCY (e.g. CCS_CURRENCY=CNY),
-# or by setting `display_currency` below. FX conversion uses `fx_rates`.
+# Per-model native currency
+# -------------------------
+# Every model block may declare a `currency: <CODE>` (defaulting to
+# `base_currency` below) and an optional multi-currency `prices:` map.
+# A model with native USD prices and no `currency` field is treated as
+# USD — back-compatible with the legacy flat-dict format.
+#
+# Resolution order at lookup time:
+#   1. `prices[display_currency]` — exact native value, no FX applied
+#   2. `prices[base_currency]`   — exact native value, FX to display
+#   3. Flat dict (legacy)        — used as-is
+#
+# `base_currency` is the FX pivot (USD by default). `display_currency`
+# defaults to **CNY** so the status line shows ¥ — the convention for
+# Chinese-speaking users. Override at runtime with env CCS_CURRENCY
+# (e.g. `CCS_CURRENCY=USD`) or by setting `display_currency` in a
+# user-level `~/.claude/statusline/pricing.yaml`. FX rates are in
+# `fx_rates` below, expressed as *units of currency per 1 USD*.
 
 base_currency: USD
-display_currency: USD
+display_currency: CNY
 
 fx_rates:
   USD: 1.0
@@ -227,3 +243,139 @@ providers:
       input_per_1m: 0.10
       input_cache_hit_per_1m: 0.01
       output_per_1m: 0.30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # MiniMax — list price is published in CNY (元) per 1M tokens. Authored
+  # here in CNY with `currency: CNY` so the per-model native currency is
+  # preserved (no FX rounding, status line shows ¥ as published). USD
+  # equivalents are reproduced under `prices.USD` for users whose
+  # `display_currency` is USD — they pick up the precise USD value when
+  # one is published, and fall back to the CNY block + FX otherwise.
+  # Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
+  #
+  # Rounding policy: CNY values rounded to 2 decimal places (1 分); USD
+  # equivalents rounded to 4 decimal places. The forward and reverse
+  # conversions agree to within 0.5 分 (e.g. 2.10 CNY / 7.18 = 0.2925 USD).
+  #
+  # Model IDs match the verbatim strings returned by api.minimaxi.com
+  # (PascalCase, with the platform's "HightSpeed" spelling). The `[1m]`
+  # suffix used by the 1-hour-cache variant is stripped automatically by
+  # cost._resolve_price before lookup, so MiniMax-M3[1m] resolves to
+  # MiniMax-M3.
+  #
+  # M3 pricing is the ≤512k input tier, 7-day limited 50% promotional price
+  # (matches the page's bold/current numbers; standard rate is 2× the promo).
+  # The page also publishes a >512k tier (4× these rates) gated behind a
+  # quota and not modeled here. M3 cache_write is not published and is
+  # therefore not billed.
+  # ─────────────────────────────────────────────────────────────────────────
+  minimax:
+    MiniMax-M2:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 2.10
+          input_cache_hit_per_1m: 0.21
+          output_per_1m: 8.40
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.2925
+          input_cache_hit_per_1m: 0.0292
+          output_per_1m: 1.1699
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.1:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 2.10
+          input_cache_hit_per_1m: 0.21
+          output_per_1m: 8.40
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.2925
+          input_cache_hit_per_1m: 0.0292
+          output_per_1m: 1.1699
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.1-HightSpeed:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 4.20
+          input_cache_hit_per_1m: 0.21
+          output_per_1m: 16.80
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.5850
+          input_cache_hit_per_1m: 0.0292
+          output_per_1m: 2.3398
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.5:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 2.10
+          input_cache_hit_per_1m: 0.21
+          output_per_1m: 8.40
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.2925
+          input_cache_hit_per_1m: 0.0292
+          output_per_1m: 1.1699
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.5-HightSpeed:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 4.20
+          input_cache_hit_per_1m: 0.21
+          output_per_1m: 16.80
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.5850
+          input_cache_hit_per_1m: 0.0292
+          output_per_1m: 2.3398
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.7:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 2.10
+          input_cache_hit_per_1m: 0.42
+          output_per_1m: 8.40
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.2925
+          input_cache_hit_per_1m: 0.0585
+          output_per_1m: 1.1699
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M2.7-HightSpeed:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 4.20
+          input_cache_hit_per_1m: 0.42
+          output_per_1m: 16.80
+          cache_write_per_1m: 2.63
+        USD:
+          input_per_1m: 0.5850
+          input_cache_hit_per_1m: 0.0585
+          output_per_1m: 2.3398
+          cache_write_per_1m: 0.3656
+
+    MiniMax-M3:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 2.10
+          input_cache_hit_per_1m: 0.42
+          output_per_1m: 8.40
+        USD:
+          input_per_1m: 0.2925
+          input_cache_hit_per_1m: 0.0585
+          output_per_1m: 1.1699

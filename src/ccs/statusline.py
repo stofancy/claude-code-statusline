@@ -110,7 +110,10 @@ def main() -> None:
     subagent_running = agg["subagent_running"]
 
     try:
-        cost_str = cost_mod.fmt_cost_multi(db.get_model_breakdown(session_id))
+        cost_str = cost_mod.fmt_cost_multi(
+            db.get_model_breakdown(session_id),
+            primary_model_id=model_id or None,
+        )
     except Exception:
         cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"
