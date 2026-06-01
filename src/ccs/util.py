@@ -33,5 +33,26 @@ def read_stdin_json() -> dict | None:
         if not raw.strip():
             return None
         return json.loads(raw)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, ValueError):
+        # ValueError catches UnicodeDecodeError (subclass) when stdin bytes
+        # cannot be decoded with the configured encoding (e.g., cp1252 on
+        # Windows receiving UTF-8 pipe data).
         return None
+
+
+def exit_with_json(data: dict, *, stderr_msg: str | None = None) -> None:
+    """Print *data* as JSON to stdout and exit with code 0.
+
+    The Claude Code hook harness parses hook command stdout as JSON.
+    Without this, an empty stdout causes ``JSONDecodeError: Expecting value``
+    (reported as "JSON validation failed" in the Claude Code UI).
+
+    If *stderr_msg* is provided, it is printed to stderr before the JSON
+    output.  The harness may or may not surface stderr, so error context
+    should also be embedded in *data* when relevant (e.g.
+    ``{"error": "..."}``).
+    """
+    if stderr_msg is not None:
+        print(stderr_msg, file=sys.stderr)
+    print(json.dumps(data))
+    sys.exit(0)

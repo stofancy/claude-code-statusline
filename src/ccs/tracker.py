@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from . import db
-from .util import read_stdin_json
+from .util import exit_with_json, read_stdin_json
 
 DEBUG_LOG = Path.home() / ".claude" / "statusline" / "debug.log"
 
@@ -101,15 +101,27 @@ def main() -> None:
         sys.exit(1)
 
     data = read_stdin_json()
+    # Harness parses hook stdout as JSON; empty string → "JSON validation failed".
+    # Emit a valid empty object so the harness sees a clean no-op result.
     if not data:
-        sys.exit(0)
+        exit_with_json({})
 
     try:
         db.init_db()
         handler(data)
     except Exception as exc:
-        print(f"ccs-tracker error ({event}): {exc}", file=sys.stderr)
-        sys.exit(0)
+        # Distinguish "error" from "no data" by embedding error detail in the JSON
+        # payload.  The harness does NOT capture stderr, so the error message MUST
+        # travel through stdout to be visible.
+        exit_with_json(
+            {"error": str(exc)},
+            stderr_msg=f"ccs-tracker error ({event}): {exc}",
+        )
+
+    # Success path: handler completed without error.  This is the most common
+    # path (valid stdin, DB write succeeds) and MUST also emit valid JSON —
+    # the harness parses stdout on EVERY hook invocation, not just errors.
+    exit_with_json({})
 
 
 if __name__ == "__main__":
