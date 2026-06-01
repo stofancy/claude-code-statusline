@@ -214,35 +214,74 @@ providers:
       output_per_1m: 2.50
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Xiaomi MiMo — published in USD (overseas pricing).
+  # Xiaomi MiMo — list price published in CNY (元) per 1M tokens. Authored
+  # here in CNY with `currency: CNY` so the per-model native currency is
+  # preserved. USD equivalents are reproduced under `prices.USD` for users
+  # whose `display_currency` is USD.
   # https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
   # V2.5 pricing effective 2026-05-27. Cache write is free (promotional).
+  # V2-pro / V2-omni will be redirected to V2.5 from 2026-06-01, sunset 2026-06-30.
   # ─────────────────────────────────────────────────────────────────────────
   mimo:
     mimo-v2.5-pro:
-      input_per_1m: 0.435
-      input_cache_hit_per_1m: 0.0036
-      output_per_1m: 0.87
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 3.00
+          input_cache_hit_per_1m: 0.025
+          output_per_1m: 6.00
+        USD:
+          input_per_1m: 0.435
+          input_cache_hit_per_1m: 0.0036
+          output_per_1m: 0.87
 
     mimo-v2.5:
-      input_per_1m: 0.14
-      input_cache_hit_per_1m: 0.0028
-      output_per_1m: 0.28
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 1.00
+          input_cache_hit_per_1m: 0.02
+          output_per_1m: 2.00
+        USD:
+          input_per_1m: 0.14
+          input_cache_hit_per_1m: 0.0028
+          output_per_1m: 0.28
 
     mimo-v2-pro:
-      input_per_1m: 0.40
-      input_cache_hit_per_1m: 0.20
-      output_per_1m: 2.00
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 3.00
+          input_cache_hit_per_1m: 0.025
+          output_per_1m: 6.00
+        USD:
+          input_per_1m: 0.435
+          input_cache_hit_per_1m: 0.0036
+          output_per_1m: 0.87
 
     mimo-v2-omni:
-      input_per_1m: 0.40
-      input_cache_hit_per_1m: 0.08
-      output_per_1m: 2.00
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 1.00
+          input_cache_hit_per_1m: 0.02
+          output_per_1m: 2.00
+        USD:
+          input_per_1m: 0.14
+          input_cache_hit_per_1m: 0.0028
+          output_per_1m: 0.28
 
     mimo-v2-flash:
-      input_per_1m: 0.10
-      input_cache_hit_per_1m: 0.01
-      output_per_1m: 0.30
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 0.70
+          input_cache_hit_per_1m: 0.07
+          output_per_1m: 2.10
+        USD:
+          input_per_1m: 0.10
+          input_cache_hit_per_1m: 0.01
+          output_per_1m: 0.30
 
   # ─────────────────────────────────────────────────────────────────────────
   # MiniMax — list price is published in CNY (元) per 1M tokens. Authored
