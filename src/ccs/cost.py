@@ -59,15 +59,25 @@ from pathlib import Path
 
 import yaml
 
-# Cache-variant suffix some providers (e.g. MiniMax, DeepSeek) append to
-# the model id when the request is sent with a 1-hour cache hint. Stripped
-# case-insensitively because we've seen both ``[1m]`` and ``[1M]`` in the
-# wild — sometimes doubled (``[1M][1m]``) when the suffix is appended
-# on top of itself. Examples handled:
-#   MiniMax-M3           → MiniMax-M3
-#   MiniMax-M3[1m]       → MiniMax-M3
-#   MiniMax-M3[1M]       → MiniMax-M3
-#   MiniMax-M3[1M][1m]   → MiniMax-M3
+# 剥离模型 ID 末尾的 ``[1m]`` / ``[1M]`` 后缀。该正则覆盖两类来源：
+#
+#   1. MiniMax / DeepSeek 等提供商的「1 小时缓存变体」标识——当请求携带
+#      1-hour cache hint 时，这些 API 会在模型 ID 后追加 ``[1m]``（偶尔
+#      追加两次 ``[1M][1m]``）。原始设计即为此场景。
+#
+#   2. Anthropic 的「1M 上下文窗口」标识——Claude Code 对 1M context 变体
+#      的模型 ID 追加相同形态的 ``[1m]`` 后缀（如 ``claude-opus-4-8[1m]``）。
+#      字面形式与上述缓存标识完全相同，因此同一正则可一并处理，剥离后得到
+#      精确的定价键名（``claude-opus-4-8``），防止逐段退化匹配到旧版模型
+#      （如 ``claude-opus-4``，其定价为 $15/$75，约为正确值的 3 倍）。
+#
+# 忽略大小写是因为实测中见过 ``[1m]`` 和 ``[1M]`` 两种写法。
+# 处理示例：
+#   MiniMax-M3                 → MiniMax-M3         （无后缀，不变）
+#   MiniMax-M3[1m]             → MiniMax-M3         （缓存变体）
+#   MiniMax-M3[1M][1m]         → MiniMax-M3         （双重缓存变体）
+#   claude-opus-4-8[1m]        → claude-opus-4-8    （1M 上下文窗口变体）
+#   claude-opus-4-8[1M]        → claude-opus-4-8    （大写，同上）
 _CACHE_SUFFIX_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 
 _BUILTIN_PRICING = Path(__file__).parent / "pricing.yaml"
