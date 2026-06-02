@@ -53,6 +53,17 @@ providers:
   # Pricing formula: cache_write_5m = 1.25 × input; cache_read = 0.1 × input.
   # ─────────────────────────────────────────────────────────────────────────
   anthropic:
+    claude-opus-4-8:
+      input_per_1m: 5.00
+      cache_write_per_1m: 6.25      # 5-minute cache write
+      cache_read_per_1m: 0.50
+      output_per_1m: 25.00
+    claude-opus-4-8-20260101:
+      input_per_1m: 5.00
+      cache_write_per_1m: 6.25
+      cache_read_per_1m: 0.50
+      output_per_1m: 25.00
+
     claude-opus-4-7:
       input_per_1m: 5.00
       cache_write_per_1m: 6.25      # 5-minute cache write
