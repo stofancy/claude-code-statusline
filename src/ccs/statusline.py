@@ -8,8 +8,52 @@ from . import db
 from . import cost as cost_mod
 from . import transcript as tx_mod
 from . import renderer
+from . import usage as usage_mod
 from .i18n import t
 from .util import read_stdin_json
+
+
+def _stdin_windows(rate_limits: dict) -> list[dict]:
+    """从 stdin rate_limits 构造滚动窗口（仅 Pro/Max 提供，resets_at 为 epoch 秒）。"""
+    windows = []
+    for key, label in (("five_hour", "5H"), ("seven_day", "7D")):
+        w = rate_limits.get(key)
+        if not isinstance(w, dict):
+            continue
+        pct = w.get("used_percentage")
+        if pct is None:
+            continue
+        windows.append({
+            "label": label,
+            "utilization": float(pct),
+            "resets_at": w.get("resets_at"),
+        })
+    return windows
+
+
+def _resolve_official_usage(version, rate_limits: dict) -> dict | None:
+    """合并 API 与 stdin 两路官方用量；逐窗口以 API 为准、stdin 兜底。"""
+    try:
+        api = usage_mod.get_usage(version)
+    except Exception:
+        api = None
+
+    stdin_windows = _stdin_windows(rate_limits or {})
+
+    if api is None:
+        if not stdin_windows:
+            return None
+        return {"subscription_type": None, "windows": stdin_windows, "monthly": None}
+
+    # API 窗口优先，缺失的窗口用 stdin 补齐（保持 5H→7D 顺序）。
+    have = {w["label"] for w in api.get("windows", [])}
+    merged = list(api.get("windows", []))
+    for w in stdin_windows:
+        if w["label"] not in have:
+            merged.append(w)
+    merged.sort(key=lambda w: 0 if w["label"] == "5H" else 1)
+    api["windows"] = merged
+    return api
 
 
 def main() -> None:
@@ -34,13 +78,10 @@ def main() -> None:
     cost_data = data.get("cost", {})
     ctx = data.get("context_window", {})
 
+    # 官方订阅用量：优先 /api/oauth/usage 端点（跨设备权威，含 enterprise
+    # 月度美元预算 + team credits），缺失的滚动窗口回落到 stdin rate_limits。
     rate_limits = data.get("rate_limits") or {}
-    rl_5h = rate_limits.get("five_hour") or {}
-    rl_7d = rate_limits.get("seven_day") or {}
-    rate_limit_5h = rl_5h.get("used_percentage")
-    rate_limit_5h_resets_at = rl_5h.get("resets_at")
-    rate_limit_7d = rl_7d.get("used_percentage")
-    rate_limit_7d_resets_at = rl_7d.get("resets_at")
+    official_usage = _resolve_official_usage(data.get("version"), rate_limits)
 
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
     snapshot_pct = ctx.get("used_percentage")
@@ -149,10 +190,7 @@ def main() -> None:
             subagent_running=subagent_running,
             compaction_count=compaction_count,
             ctx_window_size=ctx_size,
-            rate_limit_5h=rate_limit_5h,
-            rate_limit_5h_resets_at=rate_limit_5h_resets_at,
-            rate_limit_7d=rate_limit_7d,
-            rate_limit_7d_resets_at=rate_limit_7d_resets_at,
+            official_usage=official_usage,
         )
         print(output)
     except Exception as exc:

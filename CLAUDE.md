@@ -44,6 +44,7 @@ Claude Code hooks  ──stdin JSON──→ ccs-tracker ──→ SQLite (~/.cl
 Claude Code statusline tick ──stdin JSON──→ ccs-statusline
   ├── JSONL transcript ──→ 解析 message.usage → 去重 → 按模型分组 → 写入 SQLite
   ├── subagents/agent-*.jsonl ──→ 聚合子代理 token
+  ├── /api/oauth/usage（带磁盘缓存）──→ 官方订阅用量（5h/7d 窗口 + 月度预算）
   └── stdout ──→ 终端 ANSI 显示
 ```
 
@@ -54,7 +55,8 @@ Claude Code statusline tick ──stdin JSON──→ ccs-statusline
 - **`db.py`** — 位于 `~/.claude/statusline/usage.db` 的 SQLite（WAL 模式）。四张表：`sessions`（会话元数据、聚合令牌/轮次/子代理计数器）、`model_usage`（按模型分解的 token 追踪）、`tool_calls`、`subagent_events`。`update_session_tokens()` 和 `update_model_usage()` 直接写入 JSONL 解析值，无需 snapshot diff。
 - **`cost.py`** — 多提供商定价。解析链：`~/.claude/statusline/pricing.yaml` → 内置 `pricing.yaml` → 后备默认值。模型 ID 匹配：先精确查找，去除 `[1m]` 后缀，逐段剥离尾部版本号。`fmt_cost_multi()` 按模型分别定价加总；`fmt_last_cost()` 处理 per-call 成本（含 Anthropic cache_write）。
 - **`transcript.py`** — JSONL transcript 解析核心。`get_session_metrics()`：过滤含 `message.usage` 的条目，连续去重（user 消息打断链），按 `message.model` 分组统计，聚合子代理 `agent-*.jsonl`，检测 `compact_boundary` 压缩标记。`estimate_next_replay()`：基于转录本估算下一轮重播令牌（保留用于 NEXT 显示）。
-- **`renderer.py`** — 纯 ANSI 渲染。64 级健康渐变色（绿→黄→橙→红），用于 CTX 压力条和 CACHE 命中率。双行输出，`│` 分隔符，粗体/暗色着色。CACHE 百分比 = `cache_read / (input + cache_read)`（标准缓存命中率 0-100%）。TURNS 显示 `cN` 标记压缩次数。
+- **`renderer.py`** — 纯 ANSI 渲染。64 级健康渐变色（绿→黄→橙→红），用于 CTX 压力条和 CACHE 命中率。双行输出，`│` 分隔符，粗体/暗色着色。CACHE 百分比 = `cache_read / (input + cache_read)`（标准缓存命中率 0-100%）。TURNS 显示 `cN` 标记压缩次数。第二行尾部渲染官方用量段（`_fmt_official_usage`）：5H/7D 滚动窗口 + MO 月度预算（USD 显示 `$used/$limit`，credits 显示数量）。
+- **`usage.py`** — Claude Code 官方订阅用量客户端。调用驱动 `/usage` 命令的 OAuth 端点 `GET /api/oauth/usage`（必带 `User-Agent: claude-code/<ver>`，否则落入严格 429 桶）。读 token 顺序：`CLAUDE_CODE_OAUTH_TOKEN` → `~/.claude/.credentials.json`（`claudeAiOauth.accessToken`）→ macOS 钥匙串。`normalize()` 归一化两种订阅形态：**美元预算型**（enterprise，滚动窗口为 null，`extra_usage.currency==USD`）与 **额度窗口型**（team/pro/max，`five_hour`/`seven_day` 利用率 + credits）。
 - **`util.py`** — 从 stdin 读取 JSON 的共享辅助函数。
 
 ### 关键行为
@@ -69,11 +71,15 @@ Claude Code statusline tick ──stdin JSON──→ ccs-statusline
 
 **下一个重播估计（transcript.py:estimate_next_replay）：** 将最近轮次大小的平均值投影到最新调用输入上，以预测下一次重播成本。对上下文窗口进行比率检查以进行颜色编码（绿色 <50%，黄色 <80%，红色 ≥80%）。
 
+**官方用量（usage.py + statusline.py:_resolve_official_usage）：** `/api/oauth/usage` 端点限流极激进，故按 TTL（默认 300s，最低 180s，`CCS_USAGE_TTL` 可调）缓存到 `~/.claude/statusline/usage_cache.json`；状态行每次 tick 复用缓存，仅过期时发一次同步请求（4s 超时），失败按 60s 退避并沿用旧值，绝不阻塞渲染。窗口数据以 API 为权威、缺失时回落 stdin `rate_limits`（仅 Pro/Max 提供，且为 epoch 而非 ISO）。月度预算（enterprise 美元 / team credits）仅 API 提供。置 `CCS_USAGE_API=0` 关闭全部网络请求。
+
 ## 配置
 
 安装通过 `install.sh` 进行，它创建 `~/.claude/statusline/venv`，pip 安装包，并输出用于合并到 `~/.claude/settings.json` 的 hook + statusLine JSON。请参阅 `examples/settings.json` 获取完整配置。
 
 定价覆盖位于 `~/.claude/statusline/pricing.yaml`（如果缺失，则使用内置表）。设置 `CCS_DEBUG=1` 以将原始 hook JSON 写入 `~/.claude/statusline/debug.log`。
+
+官方用量相关环境变量：`CCS_USAGE_API=0` 关闭 `/api/oauth/usage` 网络请求（仅用 stdin 的 5h/7d 窗口）；`CCS_USAGE_TTL` 调整缓存刷新间隔（秒，最低 180）；`CLAUDE_CODE_OAUTH_TOKEN` 显式提供 OAuth token（否则自动从凭证文件/钥匙串读取）。
 
 ## 数据库生命周期
 

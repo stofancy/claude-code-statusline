@@ -88,30 +88,72 @@ def _color_for_replay(tokens: int, ctx_window: int) -> str:
         return _RED
 
 
-def _fmt_rate_limits_combined(
-    top_label: str,
-    top_pct: float | None,
-    top_resets_at: int | None,
-    bot_label: str,
-    bot_pct: float | None,
-    bot_resets_at: int | None,
-) -> str:
-    """Compact rate-limit segment: `5H 24% 4h57m │ 7D 41% 6d03h`."""
-    now = int(time.time())
+def _fmt_amount(n: float) -> str:
+    """Compact numeric amount for budgets/credits: 8176 → `8.18k`, 25000 → `25k`."""
+    if n >= 1_000_000:
+        s = f"{n/1_000_000:.2f}M"
+    elif n >= 1_000:
+        s = f"{n/1_000:.2f}k"
+    else:
+        s = f"{n:.0f}"
+    # 去掉 8.00k / 25.00k 这类多余的零，保留 8.18k。
+    if "." in s:
+        head, tail = s[:-1], s[-1] if s[-1].isalpha() else ""
+        if not tail:
+            head, tail = s, ""
+        head = head.rstrip("0").rstrip(".")
+        s = head + tail
+    return s
 
-    def _val(label: str, pct: float | None, resets_at: int | None) -> str:
-        if pct is None:
-            return f"{_DIM}{label} -{_RESET}"
-        c = _health_color(pct)
-        s = f"{_DIM}{label}{_RESET} {c}{pct:>3.0f}%{_RESET}"
-        if resets_at is not None:
-            rem = resets_at - now
-            if rem > 0:
-                s += f" {_DIM}{_fmt_duration(rem)}{_RESET}"
-        return s
 
+def _fmt_window(label: str, pct: float | None, resets_at: int | None) -> str:
+    """Single rolling window: `5H 24% 4h57m`."""
+    label = t(label)
+    if pct is None:
+        return f"{_DIM}{label} -{_RESET}"
+    c = _health_color(pct)
+    s = f"{_DIM}{label}{_RESET} {c}{pct:>3.0f}%{_RESET}"
+    if resets_at is not None:
+        rem = resets_at - int(time.time())
+        if rem > 0:
+            s += f" {_DIM}{_fmt_duration(rem)}{_RESET}"
+    return s
+
+
+def _fmt_dollars(cents: float) -> str:
+    """美元金额：端点以美分计，转为美元。预算通常较小，不做 k 压缩。
+    整数显示无小数（`$250`），含零头保留两位（`$84.03`）。"""
+    d = cents / 100
+    return f"${d:.0f}" if abs(d - round(d)) < 0.005 else f"${d:.2f}"
+
+
+def _fmt_monthly(monthly: dict) -> str:
+    """Monthly extra-usage budget. USD: `MO $84.03/$250 34%`; credits: `MO 8.18k/25k 33%`."""
+    used = monthly.get("used") or 0
+    limit = monthly.get("limit") or 0
+    pct = monthly.get("utilization")
+    if pct is None and limit > 0:
+        pct = used / limit * 100
+    pct = pct or 0
+    c = _health_color(pct)
+    if monthly.get("currency") == "USD":
+        # 端点以美分计量美元预算（25000 == $250）。
+        amt = f"{_fmt_dollars(used)}/{_fmt_dollars(limit)}"
+    else:
+        amt = f"{_fmt_amount(used)}/{_fmt_amount(limit)}"
+    return f"{_DIM}{t('MO')}{_RESET} {amt} {c}{pct:>3.0f}%{_RESET}"
+
+
+def _fmt_official_usage(usage: dict) -> str:
+    """Combined official-usage segment: rolling windows + monthly budget."""
+    parts = []
+    for w in usage.get("windows") or []:
+        parts.append(_fmt_window(w["label"], w.get("utilization"), w.get("resets_at")))
+    monthly = usage.get("monthly")
+    if monthly:
+        parts.append(_fmt_monthly(monthly))
     sep = f"{_DIM}│{_RESET}"
-    return f"{_val(top_label, top_pct, top_resets_at)} {sep} {_val(bot_label, bot_pct, bot_resets_at)}"
+    return f" {sep} ".join(parts)
 
 
 def render(
@@ -132,10 +174,7 @@ def render(
     subagent_running: int,
     compaction_count: int = 0,
     ctx_window_size: int = 1_000_000,
-    rate_limit_5h: float | None = None,
-    rate_limit_5h_resets_at: int | None = None,
-    rate_limit_7d: float | None = None,
-    rate_limit_7d_resets_at: int | None = None,
+    official_usage: dict | None = None,
 ) -> str:
     ctx_pct = ctx_pct or 0
 
@@ -186,13 +225,10 @@ def render(
 
     row2_parts = [turn_str, in_str, out_str, cache_str, tool_str, agent_str, dur_str]
 
-    if rate_limit_5h is not None or rate_limit_7d is not None:
-        row2_parts.append(
-            _fmt_rate_limits_combined(
-                t("5H"), rate_limit_5h, rate_limit_5h_resets_at,
-                t("7D"), rate_limit_7d, rate_limit_7d_resets_at,
-            )
-        )
+    if official_usage:
+        seg = _fmt_official_usage(official_usage)
+        if seg:
+            row2_parts.append(seg)
 
     row2 = f" {sep} ".join(row2_parts)
 
