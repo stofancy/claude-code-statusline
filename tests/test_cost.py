@@ -222,3 +222,123 @@ def test_fmt_cost_multi_real_usage_cny_verification():
         f"预期约 ¥6.72（USD $0.9356 × fx 7.18）。"
         f"若数值约 ¥20.x，说明退化到旧版 $15/$75 定价（bug 回归）。"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 任务 (e)：代理前缀模型名解析（openrouter、opencode 等）
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_openrouter_anthropic_claude_resolves_to_opus_4_8_pricing():
+    """openrouter/anthropic/claude-opus-4-8 应剥离前缀后命中内置 opus-4-8 定价 ($5/$25)。
+
+    解析链：openrouter/anthropic/claude-opus-4-8
+      → 剥 /: anthropic/claude-opus-4-8 (不命中)
+      → 剥 /: claude-opus-4-8 (命中) → input=$5, output=$25
+    """
+    price, price_currency, _ = _resolve("openrouter/anthropic/claude-opus-4-8")
+    assert price_currency == "USD", f"预期价格货币为 USD，实际为 {price_currency!r}"
+    assert price.get("input_per_1m") == 5.00, (
+        f"openrouter/anthropic/claude-opus-4-8 应解析为 $5 input，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 25.00, (
+        f"openrouter/anthropic/claude-opus-4-8 应解析为 $25 output，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_openrouter_deepseek_with_provider_segment_resolves():
+    """openrouter/deepseek/deepseek-v4-pro 嵌入 provider 段也应命中 deepseek 定价。"""
+    price, _, _ = _resolve("openrouter/deepseek/deepseek-v4-pro")
+    assert price.get("input_per_1m") == 0.435, (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 0.87, (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_openrouter_deepseek_no_provider_segment_resolves():
+    """openrouter/deepseek-v4-pro（无 provider 段）也应命中 deepseek 定价。"""
+    price, _, _ = _resolve("openrouter/deepseek-v4-pro")
+    assert price.get("input_per_1m") == 0.435, (
+        f"openrouter/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 0.87, (
+        f"openrouter/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_opencode_go_prefix_stripped():
+    """opencode-go/<model> 形式（含连字符变体）应被剥离为真实模型。"""
+    price, _, _ = _resolve("opencode-go/deepseek-v4-pro")
+    assert price.get("input_per_1m") == 0.435, (
+        f"opencode-go/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 0.87, (
+        f"opencode-go/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_opencode_prefix_stripped():
+    """opencode/<model> 形式也应被剥离。"""
+    price, _, _ = _resolve("opencode/claude-sonnet-4-6")
+    assert price.get("input_per_1m") == 3.00, (
+        f"opencode/claude-sonnet-4-6 应解析为 $3 input，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 15.00, (
+        f"opencode/claude-sonnet-4-6 应解析为 $15 output，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_openrouter_with_1m_suffix_resolves_correctly():
+    """[1m] 后缀与代理前缀组合：openrouter/anthropic/claude-opus-4-8[1m] 应仍命中 $5/$25。
+
+    这是关键组合：[1m] 剥离在先（去掉后缀），/ 剥离在后（去掉前缀）。
+    旧代码会因前缀不匹配而走默认 $1/$4 定价。
+    """
+    price, _, _ = _resolve("openrouter/anthropic/claude-opus-4-8[1m]")
+    assert price.get("input_per_1m") == 5.00, (
+        f"openrouter/anthropic/claude-opus-4-8[1m] 应解析为 $5 input，"
+        f"实际为 {price.get('input_per_1m')}（可能走了默认定价 $1）"
+    )
+    assert price.get("output_per_1m") == 25.00, (
+        f"openrouter/anthropic/claude-opus-4-8[1m] 应解析为 $25 output，"
+        f"实际为 {price.get('output_per_1m')}（可能走了默认定价 $4）"
+    )
+    # 回归保护：不应退化到 $15/$75
+    assert price.get("input_per_1m") != 15.00, (
+        f"openrouter/anthropic/claude-opus-4-8[1m] 不应退化到旧版 $15 定价"
+    )
+
+
+def test_openrouter_does_not_shadow_explicit_pricing():
+    """当用户定价表已为完整代理 ID 配置条目时，该精确条目应优先于剥离后的候选。
+
+    本测试通过 monkey-patching 临时注入一个 openrouter/... 条目，验证它被命中。
+    """
+    import ccs.cost as cm
+
+    # 临时向内置定价表注入一个独立条目用于测试
+    original_load = cm._load_pricing
+    def patched_load():
+        pricing = original_load()
+        # 深拷贝以避免污染
+        import copy
+        pricing = copy.deepcopy(pricing)
+        pricing.setdefault("providers", {}).setdefault("test_proxy", {})[
+            "openrouter/claude-opus-4-8"
+        ] = {
+            "input_per_1m": 99.99,
+            "output_per_1m": 88.88,
+            "cache_read_per_1m": 7.77,
+        }
+        return pricing
+    cm._load_pricing = patched_load
+    try:
+        price, _, _ = cm._resolve_price("openrouter/claude-opus-4-8", "USD", "USD")
+        # 完整 ID 是第一个候选，应被精确命中
+        assert price.get("input_per_1m") == 99.99, (
+            f"完整 openrouter/... 条目应被精确命中（input=99.99），"
+            f"实际为 {price.get('input_per_1m')}（说明被错误剥离到 claude-opus-4-8 的 $5）"
+        )
+    finally:
+        cm._load_pricing = original_load
