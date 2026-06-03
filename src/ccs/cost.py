@@ -233,6 +233,19 @@ def _resolve_price(
     stripped = _CACHE_SUFFIX_RE.sub("", model_id)
     if stripped != model_id:
         candidates.append(stripped)
+
+    # Strip /-delimited proxy prefixes (openrouter/, opencode/, etc.).
+    # For a model id like "openrouter/anthropic/claude-opus-4-8", this
+    # appends "anthropic/claude-opus-4-8" and "claude-opus-4-8" as
+    # candidates — the rightmost segment is the real model id that
+    # matches the pricing table. We use `stripped` (the post-[1m] form)
+    # so that proxy + cache-suffix combinations like
+    # "openrouter/.../claude-opus-4-8[1m]" resolve correctly.
+    if "/" in stripped:
+        segments = stripped.split("/")
+        for i in range(1, len(segments)):
+            candidates.append("/".join(segments[i:]))
+
     parts = stripped.split("-")
     while len(parts) > 1:
         parts.pop()
