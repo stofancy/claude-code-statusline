@@ -13,6 +13,18 @@ from .i18n import t
 from .util import read_stdin_json
 
 
+def _is_claude_model(model_id: str) -> bool:
+    """判断当前模型是否为 Claude 官方模型（支持 /api/oauth/usage 用量查询）。
+
+    当前仅 Claude 官方模型实现了用量查询（5H/7D 窗口 + 月度预算）。
+    DeepSeek、OpenAI、Gemini 等其他提供商暂不支持，不显示官方用量段。
+    非官方/代理模型（即使底层用 Claude）也不走此路径。
+    """
+    if not model_id or model_id == "unknown":
+        return False
+    return "claude" in model_id.lower()
+
+
 def _stdin_windows(rate_limits: dict) -> list[dict]:
     """从 stdin rate_limits 构造滚动窗口（仅 Pro/Max 提供，resets_at 为 epoch 秒）。"""
     windows = []
@@ -78,10 +90,12 @@ def main() -> None:
     cost_data = data.get("cost", {})
     ctx = data.get("context_window", {})
 
-    # 官方订阅用量：优先 /api/oauth/usage 端点（跨设备权威，含 enterprise
-    # 月度美元预算 + team credits），缺失的滚动窗口回落到 stdin rate_limits。
-    rate_limits = data.get("rate_limits") or {}
-    official_usage = _resolve_official_usage(data.get("version"), rate_limits)
+    # 官方订阅用量：仅 Claude 官方模型支持（/api/oauth/usage 端点），
+    # 非 Claude 模型（DeepSeek、OpenAI、Gemini 等）暂不显示。
+    official_usage = None
+    if _is_claude_model(model_id):
+        rate_limits = data.get("rate_limits") or {}
+        official_usage = _resolve_official_usage(data.get("version"), rate_limits)
 
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
     snapshot_pct = ctx.get("used_percentage")
