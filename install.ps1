@@ -63,7 +63,7 @@ $venvPip = Join-Path $venvDir 'Scripts\pip.exe'
 $packageDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Write-Cyan '→ Installing claude-code-statusline ...'
 & $venvPip install -q --upgrade pip | Out-Null
-& $venvPip install -q $packageDir
+& $venvPip install -q -e $packageDir
 if ($LASTEXITCODE -ne 0) {
     Write-Red 'Error: pip install failed'
     exit 1

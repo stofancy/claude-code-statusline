@@ -69,6 +69,10 @@ cd claude-code-statusline
 bash install.sh
 ```
 
+安装脚本会在 `~/.claude/statusline/venv` 创建虚拟环境（Windows 使用 `Scripts/*.exe`，POSIX 使用 `bin/*`），并输出适配当前平台的 `settings.json` 配置片段。路径采用正斜杠 `~/` 格式，因为 Claude Code 通过 bash 调用 hook，Windows 反斜杠路径会被破坏。
+
+本地克隆采用 **editable 模式**（`pip install -e`）安装，修改源码后无需重装，下次状态行刷新即自动生效。
+
 或通过 pip 安装：
 
 ```bash

@@ -57,7 +57,7 @@ fi
 echo -e "${CYAN}→${NC} Installing claude-code-statusline ..."
 PACKAGE_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$PACKAGE_DIR/pyproject.toml" ]; then
-    "$VENV_DIR/bin/pip" install -q "$PACKAGE_DIR"
+    "$VENV_DIR/bin/pip" install -q -e "$PACKAGE_DIR"
 else
     "$VENV_DIR/bin/pip" install -q git+https://github.com/stofancy/claude-code-statusline.git || {
         "$VENV_DIR/bin/pip" install -q claude-code-statusline

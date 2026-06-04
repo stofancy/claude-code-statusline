@@ -81,6 +81,8 @@ pwsh -File install.ps1
 
 The installer creates a venv at `~/.claude/statusline/venv` (uses `Scripts/*.exe` on Windows, `bin/*` on POSIX) and prints a `settings.json` snippet with platform-correct paths. The snippet uses forward-slash `~/` paths because Claude Code invokes hooks through bash, which mangles Windows backslash paths.
 
+The local clone is installed in **editable mode** (`pip install -e`), so editing the source and restarting is all you need — no reinstall step.
+
 ### Via pip
 
 ```bash
