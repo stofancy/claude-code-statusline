@@ -28,6 +28,28 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _extract_text(ev: dict) -> str:
+    """提取消息中的纯文本内容（不含 tool_use/tool_result）。
+
+    此函数用于 turn 边界检测——tool_result 虽然 type=user 但不代表
+    新 turn 起点，必须通过此函数过滤掉。
+    """
+    msg = ev.get("message", {})
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [block.get("text", "") if isinstance(block, dict) else str(block)
+                 for block in content]
+        return "\n".join(parts)
+    return ""
+
+
+def _extract_all_text(ev: dict) -> str:
+    """提取消息中所有文本（含 tool_use 和 tool_result 块），用于 token 估算。
+
+    tool_use 消息可能没有 text 块（只有 tool name+input），tool_result
+    消息包含大量输出内容——这些都应纳入 turn size 估算。
+    """
     msg = ev.get("message", {})
     content = msg.get("content", "")
     if isinstance(content, str):
@@ -38,12 +60,10 @@ def _extract_text(ev: dict) -> str:
             if not isinstance(block, dict):
                 parts.append(str(block))
             elif block.get("type") == "tool_use":
-                # 纯 tool_use 消息没有 text 块，用 tool name + input 估算
                 name = block.get("name", "")
                 inp = json.dumps(block.get("input", {}), ensure_ascii=False)
                 parts.append(f"{name} {inp}" if name else inp)
             elif block.get("type") == "tool_result":
-                # tool_result 内容也可能很大（文件输出等），纳入估算
                 tc = block.get("content", "")
                 if isinstance(tc, str):
                     parts.append(tc)
@@ -91,14 +111,23 @@ def count_turns(events: list[dict]) -> int:
 
 
 def recent_turn_sizes(events: list[dict], n: int = 5) -> list[int]:
-    ce = content_events(events)
+    """估算最近几轮对话的 token 大小（含 tool_use 和 tool_result 内容）。
+
+    turn 边界仅由 _extract_text 识别（排除 tool_result），但每轮内所有
+    user/assistant 消息（含 tool_use/tool_result）都纳入 token 估算。
+    """
     sizes = []
     cur = 0
-    for ev in ce:
-        if ev.get("type") == "user" and cur > 0:
+    for ev in events:
+        ev_type = ev.get("type", "")
+        if ev_type not in ("user", "assistant"):
+            continue
+        # turn 边界: 只有带文本的真实 user 消息才是新 turn 起点
+        if ev_type == "user" and _extract_text(ev) and cur > 0:
             sizes.append(cur)
             cur = 0
-        cur += _estimate_tokens(_extract_text(ev))
+        # 用 _extract_all_text 估算所有消息（含 tool_use/tool_result）的大小
+        cur += _estimate_tokens(_extract_all_text(ev))
     if cur > 0:
         sizes.append(cur)
     return sizes[-n:] if len(sizes) > n else sizes
