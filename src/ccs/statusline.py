@@ -183,7 +183,9 @@ def main() -> None:
         pred_output = int(pc_output * 1.25)
         pc_total_input = pc_input + pc_cache_read + pc_cache_write
         pred_cache = int(replay_tokens * (pc_cache_read / max(pc_total_input, 1)))
-        pred_cost_str = cost_mod.fmt_last_cost(model_id, replay_tokens - pred_cache, pred_output, pred_cache)
+        pred_cache_write = int(replay_tokens * (pc_cache_write / max(pc_total_input, 1)))
+        pred_input = max(0, replay_tokens - pred_cache - pred_cache_write)
+        pred_cost_str = cost_mod.fmt_last_cost(model_id, pred_input, pred_output, pred_cache, pred_cache_write)
     except Exception:
         pred_cost_str = "-"
 

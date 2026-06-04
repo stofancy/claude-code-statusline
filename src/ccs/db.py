@@ -295,7 +295,7 @@ def cleanup_stale(max_age_days: int = 30) -> int:
         _cleanup_stale_rows(c)
         c.commit()
         return c.total_changes
-    except sqlite3.OperationalError:
+    except Exception:
         return 0
     finally:
         c.close()

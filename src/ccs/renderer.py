@@ -51,13 +51,19 @@ def _bar(pct: float, width: int = 8) -> str:
 
 def _fmt_tokens(n: int) -> str:
     if n >= 1_000_000_000:
-        return f"{n/1_000_000_000:.3f}G"
+        s = f"{n/1_000_000_000:.3f}G"
     elif n >= 1_000_000:
-        return f"{n/1_000_000:.3f}M"
+        s = f"{n/1_000_000:.3f}M"
     elif n >= 1_000:
-        return f"{n/1_000:.3f}k"
+        s = f"{n/1_000:.3f}k"
     else:
         return str(n)
+    # 去除多余尾零：1.000k → 1k, 82.500k → 82.5k
+    if "." in s:
+        head, suffix = s[:-1], s[-1]
+        head = head.rstrip("0").rstrip(".")
+        s = head + suffix
+    return s
 
 
 def _fmt_duration(seconds: int) -> str:

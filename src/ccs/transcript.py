@@ -16,7 +16,15 @@ MIN_NEXT_DELTA = 200
 
 
 def _estimate_tokens(text: str) -> int:
-    return max(1, int(len(text) / 3.5))
+    """估算文本 token 数。英文 ~4 char/token，CJK ~1.5 char/token。
+    用 Unicode 范围检测混合文本比例，加权取平均字符/token 比率。"""
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if '一' <= ch <= '鿿' or
+              '぀' <= ch <= 'ヿ' or '가' <= ch <= '힯')
+    cjk_ratio = cjk / len(text) if text else 0
+    chars_per_token = (3.5 * (1 - cjk_ratio)) + (1.5 * cjk_ratio)
+    return max(1, int(len(text) / chars_per_token))
 
 
 def _extract_text(ev: dict) -> str:
@@ -25,9 +33,25 @@ def _extract_text(ev: dict) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [block.get("text", "") if isinstance(block, dict) else str(block)
-                 for block in content]
-        return "\n".join(parts)
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append(str(block))
+            elif block.get("type") == "tool_use":
+                # 纯 tool_use 消息没有 text 块，用 tool name + input 估算
+                name = block.get("name", "")
+                inp = json.dumps(block.get("input", {}), ensure_ascii=False)
+                parts.append(f"{name} {inp}" if name else inp)
+            elif block.get("type") == "tool_result":
+                # tool_result 内容也可能很大（文件输出等），纳入估算
+                tc = block.get("content", "")
+                if isinstance(tc, str):
+                    parts.append(tc)
+                elif isinstance(tc, list):
+                    parts.extend(str(c) for c in tc)
+            else:
+                parts.append(block.get("text", ""))
+        return "\n".join(p for p in parts if p)
     return ""
 
 
@@ -325,8 +349,15 @@ def _context_growth_deltas(events: list[dict]) -> list[int]:
     deltas = []
     for i in range(1, len(total_lens)):
         d = total_lens[i] - total_lens[i - 1]
-        if d > 0:
-            deltas.append(d)
+        if d <= 0:
+            continue
+        # 过滤压缩或 tool_use→full_context 过渡产生的虚假大增量：
+        # 如果增量 > 前次调用的 50%，说明上一次是 tool_use（仅 2-5K）
+        # 或刚刚 compression 结束——这些恢复不是真正的上下文增长。
+        prev = max(total_lens[i - 1], 1)
+        if d > prev * 0.5:
+            continue
+        deltas.append(d)
     return deltas[-10:]
 
 
