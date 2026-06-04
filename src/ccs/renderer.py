@@ -49,6 +49,19 @@ def _bar(pct: float, width: int = 8) -> str:
     return "".join(parts)
 
 
+def _strip_zeros(s: str) -> str:
+    """去除格式化数字字符串中多余的尾零：1.000k → 1k, 8.00 → 8。"""
+    if "." not in s:
+        return s
+    # 后缀字母 (k/M/G) 或无后缀纯数字
+    if s[-1].isalpha():
+        head, suffix = s[:-1], s[-1]
+    else:
+        head, suffix = s, ""
+    head = head.rstrip("0").rstrip(".")
+    return head + suffix
+
+
 def _fmt_tokens(n: int) -> str:
     if n >= 1_000_000_000:
         s = f"{n/1_000_000_000:.3f}G"
@@ -58,12 +71,7 @@ def _fmt_tokens(n: int) -> str:
         s = f"{n/1_000:.3f}k"
     else:
         return str(n)
-    # 去除多余尾零：1.000k → 1k, 82.500k → 82.5k
-    if "." in s:
-        head, suffix = s[:-1], s[-1]
-        head = head.rstrip("0").rstrip(".")
-        s = head + suffix
-    return s
+    return _strip_zeros(s)
 
 
 def _fmt_duration(seconds: int) -> str:
@@ -102,14 +110,7 @@ def _fmt_amount(n: float) -> str:
         s = f"{n/1_000:.2f}k"
     else:
         s = f"{n:.0f}"
-    # 去掉 8.00k / 25.00k 这类多余的零，保留 8.18k。
-    if "." in s:
-        head, tail = s[:-1], s[-1] if s[-1].isalpha() else ""
-        if not tail:
-            head, tail = s, ""
-        head = head.rstrip("0").rstrip(".")
-        s = head + tail
-    return s
+    return _strip_zeros(s)
 
 
 def _fmt_window(label: str, pct: float | None, resets_at: int | None) -> str:

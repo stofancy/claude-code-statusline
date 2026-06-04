@@ -15,6 +15,17 @@ _metrics_cache: dict[str, tuple[float, dict]] = {}
 MIN_NEXT_DELTA = 200
 
 
+def _context_total(usage: dict) -> int:
+    """计算一次 API 调用的总上下文 token 数。
+
+    Anthropic API（及多数提供商）中 input_tokens、cache_read_input_tokens、
+    cache_creation_input_tokens 三者互斥求和。此函数包装该求和逻辑避免各处手写。
+    """
+    return ((usage.get("input_tokens", 0) or 0) +
+            (usage.get("cache_read_input_tokens", 0) or 0) +
+            (usage.get("cache_creation_input_tokens", 0) or 0))
+
+
 def _estimate_tokens(text: str) -> int:
     """估算文本 token 数。英文 ~4 char/token，CJK ~1.5 char/token。
     用 Unicode 范围检测混合文本比例，加权取平均字符/token 比率。"""
@@ -202,18 +213,27 @@ def get_session_metrics(transcript_path: str) -> dict:
         return _empty_metrics()
 
     mtime = p.stat().st_mtime
-    # 计算 effective_mtime（主 transcript + 子代理中最新的 mtime），
-    # 确保缓存检查使用与存储一致的 mtime，避免子代理存在时缓存总是 miss。
-    sub_dir = p.parent / p.stem / "subagents"
-    effective_mtime = mtime
-    for f in glob.glob(str(sub_dir / "agent-*.jsonl")):
-        try:
-            effective_mtime = max(effective_mtime, Path(f).stat().st_mtime)
-        except OSError:
-            pass
 
     key = str(p)
     global _metrics_cache
+
+    # 快速路径：仅用主文件 mtime 即可缓存命中（覆盖无子代理的常见情况，
+    # 避免每次轮询都 glob+stat 子代理目录）
+    if key in _metrics_cache and _metrics_cache[key][0] == mtime:
+        return _metrics_cache[key][1]
+
+    # 缓存未命中：计算 effective_mtime（主 transcript + 子代理中最新的 mtime），
+    # 确保子代理存在时使用与存储一致的 mtime。
+    sub_dir = p.parent / p.stem / "subagents"
+    effective_mtime = mtime
+    if sub_dir.exists():
+        for f in glob.glob(str(sub_dir / "agent-*.jsonl")):
+            try:
+                effective_mtime = max(effective_mtime, Path(f).stat().st_mtime)
+            except OSError:
+                pass
+
+    # 二次检查：effective_mtime 可能匹配（当只有主文件变化但子代理未变时）
     if key in _metrics_cache and _metrics_cache[key][0] == effective_mtime:
         return _metrics_cache[key][1]
 
@@ -302,7 +322,7 @@ def get_session_metrics(transcript_path: str) -> dict:
             # 当前 turn(晚于最后一个 user 消息)内的 main 调用取最大 context,
             # 防止单次 API 调用因 cache 命中比例波动把 CTX 百分比拉回。
             if last_user_ts and ts > last_user_ts:
-                cl = it + cr + cw
+                cl = _context_total(usage)
                 if cl > max_context_in_turn:
                     max_context_in_turn = cl
 
@@ -312,9 +332,7 @@ def get_session_metrics(transcript_path: str) -> dict:
         context_len = max_context_in_turn
     elif most_recent_main:
         u = most_recent_main.get("message", {}).get("usage", {})
-        context_len = ((u.get("input_tokens", 0) or 0) +
-                       (u.get("cache_read_input_tokens", 0) or 0) +
-                       (u.get("cache_creation_input_tokens", 0) or 0))
+        context_len = _context_total(u)
     else:
         context_len = 0
 
@@ -370,10 +388,7 @@ def _context_growth_deltas(events: list[dict]) -> list[int]:
     total_lens = []
     for e in deduped:
         u = e.get("message", {}).get("usage", {})
-        total = ((u.get("input_tokens", 0) or 0) +
-                 (u.get("cache_read_input_tokens", 0) or 0) +
-                 (u.get("cache_creation_input_tokens", 0) or 0))
-        total_lens.append(total)
+        total_lens.append(_context_total(u))
 
     deltas = []
     for i in range(1, len(total_lens)):
@@ -384,7 +399,7 @@ def _context_growth_deltas(events: list[dict]) -> list[int]:
         # 如果增量 > 前次调用的 50%，说明上一次是 tool_use（仅 2-5K）
         # 或刚刚 compression 结束——这些恢复不是真正的上下文增长。
         prev = max(total_lens[i - 1], 1)
-        if d > prev * 0.5:
+        if d * 2 > prev:
             continue
         deltas.append(d)
     return deltas[-10:]

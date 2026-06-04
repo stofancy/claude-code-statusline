@@ -82,7 +82,9 @@ _CACHE_SUFFIX_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 
 _BUILTIN_PRICING = Path(__file__).parent / "pricing.yaml"
 _USER_PRICING = Path.home() / ".claude" / "statusline" / "pricing.yaml"
-_DEFAULT_PRICING = {"input_per_1m": 1.0, "output_per_1m": 4.0, "cache_read_per_1m": 0.1, "cache_write_per_1m": 1.25}
+# 默认定价（未知模型的后备）。注意：不包含 cache_write_per_1m，
+# 因为该字段是 Anthropic 专属的（1.25× input），对未知提供商不应假定。
+_DEFAULT_PRICING = {"input_per_1m": 1.0, "output_per_1m": 4.0, "cache_read_per_1m": 0.1}
 
 _CURRENCY_SYMBOLS = {
     "USD": "$", "CNY": "¥", "EUR": "€", "GBP": "£", "JPY": "¥",

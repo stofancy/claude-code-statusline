@@ -279,8 +279,6 @@ def _cleanup_stale_rows(c: sqlite3.Connection) -> None:
     c.execute("DELETE FROM tool_calls WHERE session_id IN (SELECT session_id FROM sessions WHERE is_stale=1)")
     c.execute("DELETE FROM subagent_events WHERE session_id IN (SELECT session_id FROM sessions WHERE is_stale=1)")
     c.execute("DELETE FROM sessions WHERE is_stale=1")
-    global _known_sessions
-    _known_sessions.clear()
 
 
 def cleanup_stale(max_age_days: int = 30) -> int:
@@ -294,6 +292,8 @@ def cleanup_stale(max_age_days: int = 30) -> int:
         c.execute("UPDATE sessions SET is_stale=1 WHERE last_updated<? AND is_stale=0", (cutoff,))
         _cleanup_stale_rows(c)
         c.commit()
+        global _known_sessions
+        _known_sessions.clear()
         return c.total_changes
     except Exception:
         return 0
