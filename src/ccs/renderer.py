@@ -175,6 +175,7 @@ def render(
     compaction_count: int = 0,
     ctx_window_size: int = 1_000_000,
     official_usage: dict | None = None,
+    cache_write: int = 0,
 ) -> str:
     ctx_pct = ctx_pct or 0
 
@@ -206,7 +207,7 @@ def render(
     in_str = f"{_DIM}{t('IN')}{_RESET} {_BOLD}{_fmt_tokens(total_input)}{_RESET}"
     out_str = f"{_DIM}{t('OUT')}{_RESET} {_BOLD}{_fmt_tokens(total_output)}{_RESET}"
 
-    total_with_cache = total_input + cache_read
+    total_with_cache = total_input + cache_read + cache_write
     cache_rate = (cache_read * 100 / total_with_cache) if total_with_cache > 0 else 0
     cache_color = _health_color(100 - cache_rate)
     cache_str = f"{_DIM}{t('CACHE')}{_RESET} {cache_color}{cache_rate:.3f}%{_RESET} {_fmt_tokens(cache_read)}"

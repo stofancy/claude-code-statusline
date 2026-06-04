@@ -9,7 +9,6 @@ _cache: dict[str, tuple[float, list[dict]]] = {}
 
 # Separate cache for token metrics (heavier computation, benefits from caching)
 _metrics_cache: dict[str, tuple[float, dict]] = {}
-_metrics_cache_path: str = ""
 
 # NEXT 投影时,即便没有增量数据也至少加上这个数,保证 NEXT ≥ 当前 context。
 # 200 token ≈ 一个很短的 user 消息,避免显示成"零增长"。
@@ -150,15 +149,25 @@ def get_session_metrics(transcript_path: str) -> dict:
         return _empty_metrics()
 
     mtime = p.stat().st_mtime
+    # 计算 effective_mtime（主 transcript + 子代理中最新的 mtime），
+    # 确保缓存检查使用与存储一致的 mtime，避免子代理存在时缓存总是 miss。
+    sub_dir = p.parent / p.stem / "subagents"
+    effective_mtime = mtime
+    for f in glob.glob(str(sub_dir / "agent-*.jsonl")):
+        try:
+            effective_mtime = max(effective_mtime, Path(f).stat().st_mtime)
+        except OSError:
+            pass
+
     key = str(p)
     global _metrics_cache
-    if key in _metrics_cache and _metrics_cache[key][0] == mtime:
+    if key in _metrics_cache and _metrics_cache[key][0] == effective_mtime:
         return _metrics_cache[key][1]
 
     events = parse_transcript(transcript_path)
     if not events:
         metrics = _empty_metrics()
-        _metrics_cache[key] = (mtime, metrics)
+        _metrics_cache[key] = (effective_mtime, metrics)
         return metrics
 
     usage_entries = [e for e in events
@@ -167,7 +176,7 @@ def get_session_metrics(transcript_path: str) -> dict:
     if not usage_entries:
         metrics = _empty_metrics()
         metrics["turn_count"] = sum(1 for e in events if e.get("type") == "user")
-        _metrics_cache[key] = (mtime, metrics)
+        _metrics_cache[key] = (effective_mtime, metrics)
         return metrics
 
     # 去重：按 message.id 去重，同一 UUID 保留最后一条。
@@ -232,7 +241,8 @@ def get_session_metrics(transcript_path: str) -> dict:
         model_usage[model]["cache_write"] += cw
 
         ts = e.get("timestamp", "")
-        if ts and not e.get("isSidechain") and not e.get("isApiErrorMessage"):
+        is_main = ts and not e.get("isSidechain") and not e.get("isApiErrorMessage")
+        if is_main:
             if ts > most_recent_ts:
                 most_recent_ts = ts
                 most_recent_main = e
@@ -274,15 +284,6 @@ def get_session_metrics(transcript_path: str) -> dict:
     sub = _subagent_metrics(transcript_path)
     _merge_metrics(metrics, sub)
 
-    # 缓存 key 取主 transcript + 子代理中最新的 mtime
-    sub_dir = p.parent / p.stem / "subagents"
-    effective_mtime = mtime
-    for f in glob.glob(str(sub_dir / "agent-*.jsonl")):
-        try:
-            effective_mtime = max(effective_mtime, Path(f).stat().st_mtime)
-        except OSError:
-            pass
-
     _metrics_cache[key] = (effective_mtime, metrics)
     return metrics
 
@@ -308,14 +309,17 @@ def _deduped_usage_events(events: list[dict]) -> list[dict]:
 def _context_growth_deltas(events: list[dict]) -> list[int]:
     """计算连续 API 调用间总上下文 token 的增量。
 
-    每次 API 调用的总上下文 = input_tokens + cache_read_input_tokens。
+    每次 API 调用的总上下文 = input_tokens + cache_read_input_tokens +
+    cache_creation_input_tokens（三者互斥求和，匹配 Anthropic API usage 语义）。
     返回相邻调用间的正增量列表，取最近 10 个值。
     """
     deduped = _deduped_usage_events(events)
     total_lens = []
     for e in deduped:
         u = e.get("message", {}).get("usage", {})
-        total = (u.get("input_tokens", 0) or 0) + (u.get("cache_read_input_tokens", 0) or 0)
+        total = ((u.get("input_tokens", 0) or 0) +
+                 (u.get("cache_read_input_tokens", 0) or 0) +
+                 (u.get("cache_creation_input_tokens", 0) or 0))
         total_lens.append(total)
 
     deltas = []

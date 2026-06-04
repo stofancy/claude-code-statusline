@@ -201,6 +201,47 @@ class TestNextReplayProjection(unittest.TestCase):
         )
         self.assertEqual(r["estimated_tokens"], 300_000)
 
+    def test_cache_write_to_cache_read_transition_not_inflating_deltas(self):
+        """cache_write → cache_read 转换不应产生虚假大增量。
+
+        同一段 context 在首次调用时以 cache_write 形式出现（写入缓存），
+        后续调用以 cache_read 形式出现（命中缓存）。两种表示下总上下文
+        大小相同，delta 应接近 0，而不是 ≈ cache_write 的大小。
+        修复前 _context_growth_deltas 漏掉了 cache_write，导致第一次调用
+        total 很小（只有 input），第二次调用 total 很大（input + cache_read），
+        产生 ≈80000 的虚假 delta，最终让 NEXT 翻倍。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "hello"),
+                # 第一次调用: 建立缓存，大部分 input 写成 cache
+                _assistant("2024-01-01T10:00:01.000Z", "m1",
+                           it=2750, cr=0, cw=80000),   # 真实 total = 82750
+                # 第二次调用: 命中缓存
+                _assistant("2024-01-01T10:00:02.000Z", "m2",
+                           it=2000, cr=80000, cw=0),    # 真实 total = 82000
+                # 第三次调用: 上下文少量增长
+                _assistant("2024-01-01T10:00:03.000Z", "m3",
+                           it=2200, cr=80500, cw=0),    # 真实 total = 82700
+            ]
+            _write(path, events)
+
+            # context_len = max in turn = 82750 (第一次调用的真实值)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 82750)
+
+            r = estimate_next_replay(
+                str(path),
+                latest_call_input=0,
+                current_context_len=82750,
+            )
+            # NEXT 应该接近当前 context，不应被虚假 delta 推到翻倍
+            # 合理范围: context_len + 少量真实增长 + MIN_NEXT_DELTA 余量
+            self.assertLess(r["estimated_tokens"], 90_000,
+                            "NEXT 不应该因 cache_write→cache_read 转换而翻倍")
+            self.assertGreaterEqual(r["estimated_tokens"], 82750)
+
 
 if __name__ == "__main__":
     unittest.main()

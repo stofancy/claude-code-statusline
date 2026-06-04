@@ -262,12 +262,13 @@ def get_model_breakdown(sid: str) -> dict:
 
         result = {}
         for r in rows:
-            result[r[0]] = {
-                "input": r[1] or 0,
-                "output": r[2] or 0,
-                "cache_read": r[3] or 0,
-                "cache_write": r[4] or 0,
-            }
+            mid = r[0]
+            if mid not in result:
+                result[mid] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+            result[mid]["input"] += r[1] or 0
+            result[mid]["output"] += r[2] or 0
+            result[mid]["cache_read"] += r[3] or 0
+            result[mid]["cache_write"] += r[4] or 0
         return result
     finally:
         c.close()

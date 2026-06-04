@@ -82,7 +82,7 @@ _CACHE_SUFFIX_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 
 _BUILTIN_PRICING = Path(__file__).parent / "pricing.yaml"
 _USER_PRICING = Path.home() / ".claude" / "statusline" / "pricing.yaml"
-_DEFAULT_PRICING = {"input_per_1m": 1.0, "output_per_1m": 4.0, "cache_read_per_1m": 0.1}
+_DEFAULT_PRICING = {"input_per_1m": 1.0, "output_per_1m": 4.0, "cache_read_per_1m": 0.1, "cache_write_per_1m": 1.25}
 
 _CURRENCY_SYMBOLS = {
     "USD": "$", "CNY": "¥", "EUR": "€", "GBP": "£", "JPY": "¥",
