@@ -11,6 +11,10 @@ _cache: dict[str, tuple[float, list[dict]]] = {}
 _metrics_cache: dict[str, tuple[float, dict]] = {}
 _metrics_cache_path: str = ""
 
+# NEXT 投影时,即便没有增量数据也至少加上这个数,保证 NEXT ≥ 当前 context。
+# 200 token ≈ 一个很短的 user 消息,避免显示成"零增长"。
+MIN_NEXT_DELTA = 200
+
 
 def _estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 3.5))
@@ -187,6 +191,15 @@ def get_session_metrics(transcript_path: str) -> dict:
             seen_msg_ids[msg_id] = len(deduped)
         deduped.append(e)
 
+    # 找到最后一个真实 user 消息的时间戳,作为当前 turn 起点。
+    # _extract_text 会过滤掉 tool_result(其 content 块是 tool_result 而非 text)。
+    last_user_ts = ""
+    for e in events:
+        if e.get("type") == "user" and _extract_text(e):
+            ts = e.get("timestamp", "")
+            if ts and ts > last_user_ts:
+                last_user_ts = ts
+
     # 聚合统计
     input_tokens = 0
     output_tokens = 0
@@ -195,6 +208,7 @@ def get_session_metrics(transcript_path: str) -> dict:
     model_usage: dict[str, dict] = {}
     most_recent_main = None
     most_recent_ts = ""
+    max_context_in_turn = 0
 
     for e in deduped:
         usage = e.get("message", {}).get("usage", {})
@@ -222,13 +236,24 @@ def get_session_metrics(transcript_path: str) -> dict:
             if ts > most_recent_ts:
                 most_recent_ts = ts
                 most_recent_main = e
+            # 当前 turn(晚于最后一个 user 消息)内的 main 调用取最大 context,
+            # 防止单次 API 调用因 cache 命中比例波动把 CTX 百分比拉回。
+            if last_user_ts and ts > last_user_ts:
+                cl = it + cr + cw
+                if cl > max_context_in_turn:
+                    max_context_in_turn = cl
 
-    context_len = 0
-    if most_recent_main:
+    # 优先使用当前 turn 的最大值;turn 内尚无新调用(用户刚发完消息,
+    # 模型还没响应)时回落最近一次 main 调用
+    if max_context_in_turn > 0:
+        context_len = max_context_in_turn
+    elif most_recent_main:
         u = most_recent_main.get("message", {}).get("usage", {})
         context_len = ((u.get("input_tokens", 0) or 0) +
                        (u.get("cache_read_input_tokens", 0) or 0) +
                        (u.get("cache_creation_input_tokens", 0) or 0))
+    else:
+        context_len = 0
 
     turn_count = sum(1 for e in events if e.get("type") == "user")
     compaction_count = sum(1 for e in events
@@ -317,11 +342,11 @@ def estimate_next_replay(
     if current_context_len > 0 and events:
         deltas = _context_growth_deltas(events)
         avg_growth = sum(deltas) // max(len(deltas), 1) if deltas else 0
-        growth = max(avg_growth, latest_call_input) if latest_call_input > 0 else (
-            avg_growth or latest_call_input or avg_turn)
+        # NEXT = 当前 context + 平均增量(典型新内容)。不要用 latest_call_input
+        # —— 那是上一次调用的绝对大小,已经被包含在 current_context_len 里,
+        # 再加一遍会得到 ~2× 关系。MIN_NEXT_DELTA 保证 NEXT 至少略高于当前。
+        growth = max(avg_growth, MIN_NEXT_DELTA)
         projected = current_context_len + growth
-    elif latest_call_input > 0 and total_input_tokens > 0:
-        projected = total_input_tokens + latest_call_input
     elif latest_call_input > 0:
         projected = latest_call_input
     elif total_input_tokens > 0:
