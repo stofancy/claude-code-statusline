@@ -141,20 +141,35 @@ providers:
       output_per_1m: 4.00
 
   # ─────────────────────────────────────────────────────────────────────────
-  # DeepSeek — published in USD on api-docs.deepseek.com.
-  # v4-pro shows promotional 75% discount through 2026-05-31. After that the
-  # standard rate is 4× the listed numbers.
+  # DeepSeek — published with official CNY prices on api-docs.deepseek.com
+  # (zh-cn/quick_start/pricing). USD equivalents use the implied exchange rate
+  # from DeepSeek's own page (~6.9 CNY/USD, not the fx_rates table).
+  # V4-Pro permanent list price (75% promotional discount made permanent).
   # ─────────────────────────────────────────────────────────────────────────
   deepseek:
     deepseek-v4-pro:
-      input_per_1m: 0.435
-      input_cache_hit_per_1m: 0.003625
-      output_per_1m: 0.87
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 3.00
+          input_cache_hit_per_1m: 0.025
+          output_per_1m: 6.00
+        USD:
+          input_per_1m: 0.435
+          input_cache_hit_per_1m: 0.003625
+          output_per_1m: 0.87
 
     deepseek-v4-flash:
-      input_per_1m: 0.14
-      input_cache_hit_per_1m: 0.0028
-      output_per_1m: 0.28
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 1.00
+          input_cache_hit_per_1m: 0.02
+          output_per_1m: 2.00
+        USD:
+          input_per_1m: 0.14
+          input_cache_hit_per_1m: 0.0028
+          output_per_1m: 0.28
 
     # Legacy names — being phased out per official docs, kept for back-compat.
     deepseek-chat:

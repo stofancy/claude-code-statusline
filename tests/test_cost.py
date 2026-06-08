@@ -248,33 +248,33 @@ def test_openrouter_anthropic_claude_resolves_to_opus_4_8_pricing():
 def test_openrouter_deepseek_with_provider_segment_resolves():
     """openrouter/deepseek/deepseek-v4-pro 嵌入 provider 段也应命中 deepseek 定价。"""
     price, _, _ = _resolve("openrouter/deepseek/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 0.435, (
-        f"openrouter/deepseek/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") == 3.0, (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 0.87, (
-        f"openrouter/deepseek/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") == 6.0, (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
     )
 
 
 def test_openrouter_deepseek_no_provider_segment_resolves():
     """openrouter/deepseek-v4-pro（无 provider 段）也应命中 deepseek 定价。"""
     price, _, _ = _resolve("openrouter/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 0.435, (
-        f"openrouter/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") == 3.0, (
+        f"openrouter/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 0.87, (
-        f"openrouter/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") == 6.0, (
+        f"openrouter/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
     )
 
 
 def test_opencode_go_prefix_stripped():
     """opencode-go/<model> 形式（含连字符变体）应被剥离为真实模型。"""
     price, _, _ = _resolve("opencode-go/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 0.435, (
-        f"opencode-go/deepseek-v4-pro 应解析为 $0.435 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") == 3.0, (
+        f"opencode-go/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 0.87, (
-        f"opencode-go/deepseek-v4-pro 应解析为 $0.87 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") == 6.0, (
+        f"opencode-go/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
     )
 
 

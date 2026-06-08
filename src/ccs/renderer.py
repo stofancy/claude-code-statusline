@@ -7,6 +7,7 @@
 import time
 
 from .i18n import t
+from .cost import _symbol_for
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -151,6 +152,33 @@ def _fmt_monthly(monthly: dict) -> str:
     return f"{_DIM}{t('MO')}{_RESET} {amt} {c}{pct:>3.0f}%{_RESET}"
 
 
+def _fmt_balance(balance: dict) -> str:
+    """Format provider balance/credits/quota for the status line.
+
+    DeepSeek (monetary): ``BAL ¥110.00``
+    OpenAI (credits):    ``BAL $4.90``
+    MiniMax (quota):     ``BAL general 97%``
+    """
+    ptype = balance.get("type", "")
+    label = f"{_DIM}{t('BAL')}{_RESET}"
+    if ptype == "monetary":
+        cur = balance.get("currency", "USD")
+        amt = balance.get("balance", 0)
+        symbol = _symbol_for(cur)
+        return f"{label} \033[33m{symbol}{amt:g}\033[0m"
+    if ptype == "credits":
+        amt = balance.get("balance", 0)
+        return f"{label} \033[33m${amt:.2f}\033[0m"
+    if ptype == "quota":
+        quotas = balance.get("quotas", [])
+        parts = []
+        for q in quotas:
+            pct = q.get("remaining_pct", 0)
+            parts.append(f"{_health_color(100-pct)}{q['name']} {pct}%{_RESET}")
+        return f"{label} {'│'.join(parts)}"
+    return ""
+
+
 def _fmt_official_usage(usage: dict) -> str:
     """Combined official-usage segment: rolling windows + monthly budget."""
     parts = []
@@ -183,6 +211,7 @@ def render(
     ctx_window_size: int = 1_000_000,
     official_usage: dict | None = None,
     cache_write: int = 0,
+    balance: dict | None = None,
 ) -> str:
     ctx_pct = ctx_pct or 0
 
@@ -235,6 +264,10 @@ def render(
 
     if official_usage:
         seg = _fmt_official_usage(official_usage)
+        if seg:
+            row2_parts.append(seg)
+    elif balance:
+        seg = _fmt_balance(balance)
         if seg:
             row2_parts.append(seg)
 

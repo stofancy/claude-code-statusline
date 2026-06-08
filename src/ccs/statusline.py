@@ -9,20 +9,11 @@ from . import cost as cost_mod
 from . import transcript as tx_mod
 from . import renderer
 from . import usage as usage_mod
+from . import balance as balance_mod
+from .balance import provider_for as _balance_provider
+from .balance import resolve_actual_model_id as _resolve_actual_model_id
 from .i18n import t
 from .util import read_stdin_json
-
-
-def _is_claude_model(model_id: str) -> bool:
-    """判断当前模型是否为 Claude 官方模型（支持 /api/oauth/usage 用量查询）。
-
-    当前仅 Claude 官方模型实现了用量查询（5H/7D 窗口 + 月度预算）。
-    DeepSeek、OpenAI、Gemini 等其他提供商暂不支持，不显示官方用量段。
-    非官方/代理模型（即使底层用 Claude）也不走此路径。
-    """
-    if not model_id or model_id == "unknown":
-        return False
-    return "claude" in model_id.lower()
 
 
 def _stdin_windows(rate_limits: dict) -> list[dict]:
@@ -84,18 +75,27 @@ def main() -> None:
     transcript_path = data.get("transcript_path", "")
     model = data.get("model", {})
     model_id = model.get("id", "unknown") if isinstance(model, dict) else "unknown"
+    # 解析真实模型名：代理模式下 claude-opus-4-8 → deepseek-v4-pro 等
+    actual_model_id = _resolve_actual_model_id(model_id)
     model_name = model.get("display_name", "") if isinstance(model, dict) else ""
     if not model_name or model_name == model_id:
-        model_name = model_id.replace("[1m]", "").replace("-", " ").title()
+        model_name = actual_model_id.replace("-", " ").title()
     cost_data = data.get("cost", {})
     ctx = data.get("context_window", {})
 
-    # 官方订阅用量：仅 Claude 官方模型支持（/api/oauth/usage 端点），
-    # 非 Claude 模型（DeepSeek、OpenAI、Gemini 等）暂不显示。
+    # 真实提供商检测：代理模式下 model_id 可能为 claude*，但实际后端是 DeepSeek 等。
+    # 统一用 balance.provider_for 判断（含代理检测），不再单独写 _is_claude_model。
+    balance_provider = _balance_provider(model_id)
     official_usage = None
-    if _is_claude_model(model_id):
+    balance = None
+    if balance_provider == "anthropic":
         rate_limits = data.get("rate_limits") or {}
         official_usage = _resolve_official_usage(data.get("version"), rate_limits)
+    elif balance_provider:
+        try:
+            balance = balance_mod.get_balance(model_id)
+        except Exception:
+            balance = None
 
     cur_snapshot_input = ctx.get("total_input_tokens", 0) or 0
     snapshot_pct = ctx.get("used_percentage")
@@ -168,14 +168,14 @@ def main() -> None:
     try:
         cost_str = cost_mod.fmt_cost_multi(
             db.get_model_breakdown(session_id),
-            primary_model_id=model_id or None,
+            primary_model_id=actual_model_id or None,
         )
     except Exception:
         cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"
 
     try:
-        last_cost_str = cost_mod.fmt_last_cost(model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
+        last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
     except Exception:
         last_cost_str = "-"
 
@@ -185,7 +185,7 @@ def main() -> None:
         pred_cache = int(replay_tokens * pc_cache_read // pc_total)
         pred_cache_write = int(replay_tokens * pc_cache_write // pc_total)
         pred_input = max(0, replay_tokens - pred_cache - pred_cache_write)
-        pred_cost_str = cost_mod.fmt_last_cost(model_id, pred_input, pred_output, pred_cache, pred_cache_write)
+        pred_cost_str = cost_mod.fmt_last_cost(actual_model_id, pred_input, pred_output, pred_cache, pred_cache_write)
     except Exception:
         pred_cost_str = "-"
 
@@ -210,6 +210,7 @@ def main() -> None:
             compaction_count=compaction_count,
             ctx_window_size=ctx_size,
             official_usage=official_usage,
+            balance=balance,
         )
         print(output)
     except Exception as exc:
