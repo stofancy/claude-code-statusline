@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from .renderer import _fmt_model_name
 from . import db
 from .util import exit_with_json, read_stdin_json
 
@@ -39,7 +40,8 @@ def _handle_stop(data: dict) -> None:
         return
     model = data.get("model", {})
     model_id = model.get("id", "") if isinstance(model, dict) else ""
-    model_name = model.get("display_name", "") if isinstance(model, dict) else ""
+    display_name = model.get("display_name", "") if isinstance(model, dict) else ""
+    model_name = _fmt_model_name(model_id, display_name) if model_id else ""
     db.ensure_session(session_id, model_id, model_name)
 
 

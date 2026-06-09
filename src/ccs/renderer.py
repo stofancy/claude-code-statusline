@@ -191,6 +191,78 @@ def _fmt_official_usage(usage: dict) -> str:
     return f" {sep} ".join(parts)
 
 
+# ── Model display name ──────────────────────────────────────────────────────
+
+_BRAND_OVERRIDES: dict[str, str] = {
+    "deepseek": "DeepSeek",
+    "gpt": "GPT",
+    "minimax": "MiniMax",
+    "openai": "OpenAI",
+    "gemini": "Gemini",
+    "claude": "Claude",
+    "mistral": "Mistral",
+    "llama": "LLaMA",
+    "mimo": "MIMO",
+}
+
+
+def _fmt_model_name(model_id: str, display_name: str = "") -> str:
+    """将模型 ID 转换为用户可读的显示名。
+
+    优先级：
+      1. stdin 提供的 ``display_name``（非空且不等于 model_id）
+      2. 品牌感知格式化（resolve_actual_model_id → 品牌覆写 → 数字段保连字符）
+      3. 原始 model_id 回退
+
+    None / 空字符串安全：返回 ``""``。
+    含 ``[1M]`` 后缀时追加 `` 1M`` 标记。
+    """
+    if not model_id:
+        return ""
+
+    # 优先级 1: stdin 提供的 display_name
+    if display_name and display_name != model_id:
+        return display_name
+
+    # 优先级 2: 解析实际模型 ID + 品牌感知格式化
+    from .balance import resolve_actual_model_id, _detect_proxy_provider
+
+    resolved = resolve_actual_model_id(model_id)
+    if not resolved:
+        return model_id
+
+    # 品牌感知格式化：连字符分段，每段独立处理大小写
+    parts: list[str] = []
+    for part in resolved.split("-"):
+        if not part:
+            continue
+        # 数字段保持原样（"4", "20251001"）
+        if part.isdigit():
+            parts.append(part)
+        # 数字+字母组合保持原样（"4o", "3.5"）
+        elif part and part[0].isdigit():
+            parts.append(part)
+        else:
+            lower = part.lower()
+            if lower in _BRAND_OVERRIDES:
+                parts.append(_BRAND_OVERRIDES[lower])
+            elif part.isupper() and len(part) <= 5:
+                # 短全部大写缩写保持全大写（如 "API"）
+                parts.append(part)
+            else:
+                parts.append(part.capitalize())
+
+    display = " ".join(parts)
+
+    # [1M] 标记仅在非代理模式下追加——代理映射后的实际模型
+    # （如 deepseek-v4-flash）并无 1M 上下文窗口，避免误导。
+    if not _detect_proxy_provider():
+        if "[1M]" in model_id or "[1m]" in model_id:
+            display += " 1M"
+
+    return display
+
+
 def render(
     model_name: str,
     ctx_pct: float | None,

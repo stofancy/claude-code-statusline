@@ -10,6 +10,7 @@ from . import transcript as tx_mod
 from . import renderer
 from . import usage as usage_mod
 from . import balance as balance_mod
+from .renderer import _fmt_model_name
 from .balance import provider_for as _balance_provider
 from .balance import resolve_actual_model_id as _resolve_actual_model_id
 from .i18n import t
@@ -77,9 +78,8 @@ def main() -> None:
     model_id = model.get("id", "unknown") if isinstance(model, dict) else "unknown"
     # 解析真实模型名：代理模式下 claude-opus-4-8 → deepseek-v4-pro 等
     actual_model_id = _resolve_actual_model_id(model_id)
-    model_name = model.get("display_name", "") if isinstance(model, dict) else ""
-    if not model_name or model_name == model_id:
-        model_name = actual_model_id.replace("-", " ").title()
+    display_name = model.get("display_name", "") if isinstance(model, dict) else ""
+    model_name = _fmt_model_name(model_id, display_name)
     cost_data = data.get("cost", {})
     ctx = data.get("context_window", {})
 

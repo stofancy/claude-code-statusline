@@ -97,6 +97,18 @@ def _detect_proxy_provider() -> str | None:
     return None
 
 
+def _strip_suffix(model_id: str) -> str:
+    """统一剥离模型 ID 中的 ``[1m]`` / ``[1M]`` 后缀。
+
+    两种来源共享同一后缀形态：
+    - 缓存变体标识（MiniMax/DeepSeek 的 1-hour cache hint）
+    - 1M 上下文窗口标识（Anthropic Claude Code 的 1M context 变体）
+    """
+    if not model_id:
+        return ""
+    return model_id.replace("[1m]", "").replace("[1M]", "").strip()
+
+
 def resolve_actual_model_id(mapped_model_id: str) -> str:
     """将代理映射后的模型 ID 解析为实际模型名。
 
@@ -105,12 +117,19 @@ def resolve_actual_model_id(mapped_model_id: str) -> str:
     ``deepseek-v4-flash``。此函数通过 ``ANTHROPIC_DEFAULT_*_MODEL_NAME``
     环境变量解析真实模型 ID。
 
-    非代理模式：原样返回 ``mapped_model_id``。
+    非代理模式：剥离后缀后原样返回 ``mapped_model_id``。
     """
+    if not mapped_model_id:
+        return ""
     if not _detect_proxy_provider():
-        return mapped_model_id
+        return _strip_suffix(mapped_model_id)
 
-    mid = mapped_model_id.lower().replace("[1m]", "").replace("[1m]", "")
+    # 如果 model_id 已经是非 Claude 模型（如 deepseek-v4-flash）、
+    # 说明客户端已直接使用实际模型而非通过代理映射，无需再做 tier 解析。
+    if "claude" not in mapped_model_id.lower():
+        return _strip_suffix(mapped_model_id)
+
+    mid = mapped_model_id.lower().replace("[1m]", "").replace("[1M]", "")
 
     # 按 tier 映射：claude-opus→OPUS, claude-sonnet→SONNET, claude-haiku→HAIKU
     _TIER_ENV_MAP = [
@@ -122,11 +141,12 @@ def resolve_actual_model_id(mapped_model_id: str) -> str:
         if keyword in mid:
             actual = os.environ.get(env_key, "").strip()
             if actual:
-                return actual.replace("[1m]", "").replace("[1M]", "").strip()
+                return _strip_suffix(actual)
 
     # 后备：用 OPUS 模型名
-    return (os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", mapped_model_id)
-            .replace("[1m]", "").replace("[1M]", "").strip())
+    return _strip_suffix(
+        os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", mapped_model_id)
+    )
 
 
 def provider_for(model_id: str) -> str | None:
