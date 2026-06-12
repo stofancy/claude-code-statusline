@@ -65,18 +65,23 @@ else
 fi
 echo -e "${GREEN}✓${NC} Package installed"
 
-# 4. Verify binaries
-CCS_STATUSLINE="$VENV_DIR/bin/ccs-statusline"
-CCS_TRACKER="$VENV_DIR/bin/ccs-tracker"
-if [ ! -x "$CCS_STATUSLINE" ]; then
-    echo -e "${RED}Error: ccs-statusline not found after install${NC}"
+# 4. Verify package is importable
+CCS_PYTHON="$VENV_DIR/bin/python"
+if [ ! -x "$CCS_PYTHON" ]; then
+    echo -e "${RED}Error: venv python not found${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓${NC} ccs-statusline → $CCS_STATUSLINE"
-echo -e "${GREEN}✓${NC} ccs-tracker   → $CCS_TRACKER"
+"$CCS_PYTHON" -c "import ccs.statusline, ccs.tracker" || {
+    echo -e "${RED}Error: ccs modules not importable${NC}"
+    exit 1
+}
+echo -e "${GREEN}✓${NC} ccs.statusline  → import OK"
+echo -e "${GREEN}✓${NC} ccs.tracker     → import OK"
 
-# 5. Configure Claude Code settings
+# 5. Configure Claude Code settings — use python -m form so edits are hot-loaded
 CC_SETTINGS="$HOME/.claude/settings.json"
+CCS_TRACKER_CMD="$CCS_PYTHON -m ccs.tracker"
+CCS_STATUSLINE_CMD="$CCS_PYTHON -m ccs.statusline"
 HOOKS_JSON=$(cat <<'ENDHOOKS'
 {
   "hooks": {
@@ -86,7 +91,7 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
         "hooks": [
           {
             "type": "command",
-            "command": "CCS_TRACKER_PATH --event stop"
+            "command": "CCS_TRACKER_CMD --event stop"
           }
         ]
       }
@@ -97,7 +102,7 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
         "hooks": [
           {
             "type": "command",
-            "command": "CCS_TRACKER_PATH --event tool"
+            "command": "CCS_TRACKER_CMD --event tool"
           }
         ]
       }
@@ -108,7 +113,7 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
         "hooks": [
           {
             "type": "command",
-            "command": "CCS_TRACKER_PATH --event subagent-start"
+            "command": "CCS_TRACKER_CMD --event subagent-start"
           }
         ]
       }
@@ -119,7 +124,7 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
         "hooks": [
           {
             "type": "command",
-            "command": "CCS_TRACKER_PATH --event subagent-stop"
+            "command": "CCS_TRACKER_CMD --event subagent-stop"
           }
         ]
       }
@@ -127,7 +132,7 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
   },
   "statusLine": {
     "type": "command",
-    "command": "CCS_STATUSLINE_PATH",
+    "command": "CCS_STATUSLINE_CMD",
     "padding": 2,
     "refreshInterval": 15
   }
@@ -135,8 +140,8 @@ HOOKS_JSON=$(cat <<'ENDHOOKS'
 ENDHOOKS
 )
 
-HOOKS_JSON="${HOOKS_JSON//CCS_TRACKER_PATH/$CCS_TRACKER}"
-HOOKS_JSON="${HOOKS_JSON//CCS_STATUSLINE_PATH/$CCS_STATUSLINE}"
+HOOKS_JSON="${HOOKS_JSON//CCS_TRACKER_CMD/$CCS_TRACKER_CMD}"
+HOOKS_JSON="${HOOKS_JSON//CCS_STATUSLINE_CMD/$CCS_STATUSLINE_CMD}"
 
 echo ""
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

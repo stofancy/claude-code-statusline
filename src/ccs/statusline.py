@@ -111,9 +111,22 @@ def main() -> None:
 
     try:
         db.ensure_session(session_id, model_id, model_name)
-        metrics = tx_mod.get_session_metrics(transcript_path)
+        raw_metrics = tx_mod.get_session_metrics(transcript_path)
+        # 将 JSONL 里的代理模型名（如 claude-opus-4-8-2）映射为实际模型名
+        # （如 deepseek-v4-pro），写入 DB 后定价查表精确匹配，不退化到 Anthropic 定价。
+        raw_mu = raw_metrics.get("model_usage", {})
+        mapped_mu: dict[str, dict] = {}
+        for mid, usage in raw_mu.items():
+            actual = _resolve_actual_model_id(mid)
+            if actual not in mapped_mu:
+                mapped_mu[actual] = dict(usage)
+            else:
+                for k in ("input", "output", "cache_read", "cache_write"):
+                    mapped_mu[actual][k] = mapped_mu[actual].get(k, 0) + usage.get(k, 0)
+        metrics = {**raw_metrics, "model_usage": mapped_mu}
         db.update_session_tokens(session_id, metrics)
-        db.update_model_usage(session_id, metrics.get("model_usage", {}))
+        if mapped_mu:  # 仅当有数据时才写入——防止 transcript_path 为空时清空已有数据
+            db.update_model_usage(session_id, mapped_mu)
         compaction_count = metrics.get("compaction_count", 0)
     except Exception:
         metrics = {}
