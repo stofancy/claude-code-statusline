@@ -136,12 +136,16 @@ def update_session_tokens(sid: str, metrics: dict) -> None:
 
 
 def update_model_usage(sid: str, model_usage: dict) -> None:
-    """直接写入按模型分解的 token 值到 model_usage 表。"""
+    """直接写入按模型分解的 token 值到 model_usage 表。
+
+    先删后写——防止旧映射键残留导致重复累加（如旧键 claude-opus-4-8-2
+    和新键 deepseek-v4-pro 同时存在，get_model_breakdown 会把两者都计入）。"""
     c = _conn()
     try:
         now = int(time.time())
+        c.execute("DELETE FROM model_usage WHERE session_id=?", (sid,))
         for model_id, m in model_usage.items():
-            c.execute("""INSERT OR REPLACE INTO model_usage
+            c.execute("""INSERT INTO model_usage
                 (session_id, model_id, tot_input_tokens, tot_output_tokens,
                  tot_cache_read_tokens, tot_cache_write_tokens, last_snapshot, last_updated)
                 VALUES (?,?,?,?,?,?,?,?)""",
