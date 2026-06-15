@@ -17,6 +17,8 @@ Claude Code 内置的 `cost.total_cost_usd` 假定使用 Anthropic USD 定价。
 - 检测并显示 **压缩次数**（TURNS 上的 `cN` 后缀）
 - 估算 **下一轮重播令牌数**，在上下文溢出前发出预警
 - 将 **子代理 transcript token**（来自 `subagents/agent-*.jsonl`）聚合到主会话
+- 显示 **Claude 官方订阅用量**——即 `/usage` 命令背后的数据：5 小时/7 天滚动窗口及月度预算（Enterprise 美元消耗或 Team/Max credits）
+- 在通过非 Anthropic 提供商运行时显示 **提供商余额 / 额度 / 配额**（DeepSeek ¥ 余额、OpenAI $ 额度、MiniMax 配额 %）
 
 ## 显示效果
 
@@ -60,6 +62,51 @@ TURNS 47c2 │ IN 512.384k │ OUT 84.030k │ CACHE 96.351% 13.376M │ TOOLS 6
 **CACHE 说明**：百分比使用 JSONL 解析的 cache_read 与 input 计算，而非 snapshot 值。非缓存输入（`IN`）已排除 cache_read，避免重复计数。
 
 **NEXT 估算逻辑**：取转录中最近几轮（最近 5 个 user→assistant 周期）的平均大小，投射到最新 API 调用的输入上。通过半切分比率检测增长趋势（稳定/上升/下降）。当 `estimated_tokens / ctx_window_size` 超过 50% 变黄，超过 80% 变红作为溢出预警。
+
+## 官方订阅用量
+
+当你以 Claude.ai 订阅账户登录 Claude Code 后，状态行可在第二行末尾追加你的**官方用量**——与 `/usage` 命令显示的数字一致：
+
+```
+… │ 5H 24% 4h57m │ 7D 81% 5d14h │ MO 8.18k/25k 33%    Pro / Max / Team
+… │ MO $85.10/$250 34%                                 Enterprise
+```
+
+| 字段 | 含义 |
+|------|------|
+| `5H` | 5 小时滚动窗口利用率（%）+ 重置倒计时 |
+| `7D` | 7 天（每周）窗口利用率（%）+ 重置倒计时 |
+| `MO` | 月度超额预算。**Enterprise** → 美元消耗 `$已用/$上限`；**Team / Max / Pro** → credits `已用/上限` |
+
+自动识别两种订阅形态：
+
+- **窗口 / credits 型**（Pro、Max、Team）：显示 5H + 7D 滚动窗口及重置倒计时；若启用超额用量，再显示月度 credits 预算。
+- **Enterprise（按席位）**：滚动窗口不适用（API 返回 `null`），仅显示月度**美元**预算。
+
+**数据来源。** OAuth 保护的 `GET /api/oauth/usage` 端点（`/usage` 命令本身调用的同一个）；当该 API 不可用时，5H/7D 窗口回落到状态行 stdin 的 `rate_limits` 字段。该端点限流极激进，故响应缓存到磁盘（`~/.claude/statusline/usage_cache.json`），最多每 5 分钟刷新一次——网络请求**绝不阻塞渲染**（4 秒超时，失败沿用旧值并按 60 秒退避重试）。OAuth token 读取顺序：`CLAUDE_CODE_OAUTH_TOKEN` → `~/.claude/.credentials.json` → macOS 钥匙串。
+
+设 `CCS_USAGE_API=0` 可关闭全部网络请求（Pro/Max 的 stdin 5H/7D 窗口仍会显示）。
+
+## 提供商余额 / 额度
+
+当前模型属于**非 Anthropic 提供商**时（通常是代理模式），官方用量段会被 `BAL` 段替换，显示该提供商的剩余余额、额度或配额：
+
+```
+… │ BAL ¥110.00          DeepSeek（货币余额）
+… │ BAL $4.90            OpenAI（剩余额度）
+… │ BAL general 97%      MiniMax（配额 %，按健康度着色）
+```
+
+| 提供商 | 数据来源 | 凭证 |
+|--------|----------|------|
+| DeepSeek | `GET /user/balance`（官方） | `DEEPSEEK_API_KEY` |
+| OpenAI | `GET /dashboard/billing/credit_grants`（未公开） | `OPENAI_SESSION_KEY`（浏览器会话 key） |
+| MiniMax | `GET /v1/token_plan/remains`（配额） | `MINIMAX_API_KEY`，或自动从 `~/.minimaxi/credentials.json` / `mmx` CLI 状态发现 |
+| Anthropic | 委托给上文「官方订阅用量」 | — |
+
+提供商从模型 ID 解析，含**代理模式**——真实模型名通过 `ANTHROPIC_DEFAULT_*_MODEL_NAME` 还原。与官方用量一样，响应磁盘缓存以规避限流，且绝不阻塞渲染。
+
+设 `CCS_BALANCE_API=0` 关闭全部余额网络请求；`CCS_BALANCE_TTL` 调整缓存刷新间隔（秒，最低 `180`，默认 `300`）。
 
 ## 快速开始
 
@@ -106,8 +153,14 @@ pip install git+https://github.com/stofancy/claude-code-statusline.git
 | OpenAI | GPT-5 | 8.98 | 1.80 | — | 71.80 |
 | Google | Gemini 2.5 Pro | 8.98 | 0.89 | — | 35.91 |
 | Google | Gemini 2.5 Flash | 1.08 | 0.11 | — | 4.31 |
+| 智谱（GLM） | GLM-5.2 / 5.1 | 8.00 | 2.00 | 免费 | 28.00 |
+| 智谱（GLM） | GLM-4.7 | 4.00 | 0.80 | 免费 | 16.00 |
+| 智谱（GLM） | GLM-4.5-Air | 1.20 | 0.24 | 免费 | 8.00 |
+| 智谱（GLM） | GLM-4.7-Flash | 免费 | 免费 | 免费 | 免费 |
 
 DeepSeek V4-Pro 2.5× 折扣有效期至北京时间 2026/05/31 23:59。到期后请更新 `pricing.yaml`。
+
+GLM 标价按输入长度分档，上表记录 `≥32k` 档。GLM 全系缓存写入促销免费，GLM-4.7-Flash 完全免费。精确的各档价格见 `pricing.yaml` 的 `zhipu` 块。
 
 如果你使用基于 USD 的提供商，可将其价格转换为人民币并通过用户定价文件覆盖，或设置 `default_currency: USD` 并相应更新各提供商的价格。
 
@@ -123,6 +176,8 @@ Claude Code statusline tick (every 15s) → ccs-statusline
   ├── stdin JSON ─── model, cost, context_window, transcript_path
   ├── JSONL transcript ─── parse message.usage entries → dedup → per-model aggregation
   ├── subagents/agent-*.jsonl ─── aggregate subagent token usage
+  ├── /api/oauth/usage ─── official subscription usage (disk-cached, 5min TTL)
+  ├── provider balance API ─── DeepSeek / OpenAI / MiniMax balance (disk-cached)
   ├── SQLite ─── write parsed values to sessions + model_usage tables
   └── stdout ─── 2-line ANSI text
 ```
@@ -136,6 +191,9 @@ Claude Code statusline tick (every 15s) → ccs-statusline
 | `db.py` | — | SQLite 模式（4 张表）、直接写入、CRUD、清理 |
 | `cost.py` | — | 多提供商定价、按模型成本加总、模型 ID 解析 |
 | `transcript.py` | — | JSONL 解析、去重、token 统计、子代理聚合、重播估算 |
+| `usage.py` | — | 官方 `/api/oauth/usage` 客户端：token 发现、磁盘缓存请求、两种订阅形态归一化 |
+| `balance.py` | — | 多提供商余额/额度/配额客户端（DeepSeek、OpenAI、MiniMax），含代理模式模型解析 |
+| `i18n.py` | — | 渲染标签的极简本地化层（`CCS_LANG`、`locales/*.yaml`） |
 | `renderer.py` | — | 256 色条、token 格式化、双行布局 |
 | `util.py` | — | 共享 stdin JSON 读取器 |
 | `pricing.yaml` | — | 可配置的提供商定价表 |
@@ -173,6 +231,14 @@ Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件
 | 变量 | 用途 |
 |----------|---------|
 | `CCS_DEBUG=1` | 将原始 hook 数据写入 `~/.claude/statusline/debug.log` |
+| `CCS_USAGE_API=0` | 关闭官方 `/api/oauth/usage` 查询（Pro/Max 的 stdin 5H/7D 窗口仍显示） |
+| `CCS_USAGE_TTL` | 官方用量缓存刷新间隔（秒，最低 `180`，默认 `300`） |
+| `CLAUDE_CODE_OAUTH_TOKEN` | 显式提供 OAuth token；否则自动从凭证文件 / 钥匙串读取 |
+| `CCS_BALANCE_API=0` | 关闭提供商余额/额度/配额查询 |
+| `CCS_BALANCE_TTL` | 提供商余额缓存刷新间隔（秒，最低 `180`，默认 `300`） |
+| `DEEPSEEK_API_KEY` / `OPENAI_SESSION_KEY` / `MINIMAX_API_KEY` | `BAL` 余额段的提供商凭证 |
+| `CCS_LANG` | 界面语言——`en`（默认）或 `zh`；未设时回落到 `$LANG`/`$LC_ALL` |
+| `CCS_CURRENCY` | 覆盖显示币种（通过 `pricing.yaml` 的 `fx_rates` 换算） |
 
 ## 数据库
 
