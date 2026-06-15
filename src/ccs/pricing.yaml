@@ -444,3 +444,127 @@ providers:
           input_per_1m: 0.2925
           input_cache_hit_per_1m: 0.0585
           output_per_1m: 1.1699
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Zhipu BigModel (GLM series) — list price published in CNY (元) per 1M
+  # tokens. Authored in CNY with `currency: CNY` so the status line shows ¥
+  # as published. USD equivalents are reproduced under `prices.USD`.
+  # Source: https://bigmodel.cn/pricing (verified 2026-06-15)
+  #
+  # Tiered pricing: GLM-5.x / 4.7 / 4.5-Air charge by input length. We record
+  # the HIGH-context tier ([32+) for the 5.x line, [32,200) for 4.7, [32,128)
+  # for 4.5-Air) — the long-horizon coding sessions this tool tracks routinely
+  # exceed 32k tokens. The [0,32) tier is cheaper (e.g. GLM-5.1 ¥6/24 vs
+  # ¥8/28); switch down only if your sessions stay small.
+  #
+  # GLM-5.2 is priced identically to GLM-5.1 (per official notice).
+  #
+  # Cache storage (cache_write) is promotional-free across the whole GLM line
+  # ("限时免费") and is intentionally OMITTED — no `cache_write_per_1m` key
+  # means cache writes are unbilled (cost._model_cost_in_native only charges
+  # cache_write when the key is present). Revisit when the promo ends.
+  #
+  # GLM-4.7-Flash is fully free (input/output/cache all ¥0); FlashX/Flash use
+  # a single non-tiered price (200K context).
+  #
+  # Model IDs use the lowercase form returned by BigModel's OpenAI-compatible
+  # endpoint (e.g. `glm-5.1`). The case-insensitive + tail-segment-stripping
+  # fallback in cost._resolve_price covers dated variants
+  # (e.g. `glm-5.1-20260601` → `glm-5.1`).
+  # ─────────────────────────────────────────────────────────────────────────
+  zhipu:
+    glm-5.2:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 8.00
+          input_cache_hit_per_1m: 2.00
+          output_per_1m: 28.00
+        USD:
+          input_per_1m: 1.1142
+          input_cache_hit_per_1m: 0.2786
+          output_per_1m: 3.8997
+
+    glm-5.1:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 8.00
+          input_cache_hit_per_1m: 2.00
+          output_per_1m: 28.00
+        USD:
+          input_per_1m: 1.1142
+          input_cache_hit_per_1m: 0.2786
+          output_per_1m: 3.8997
+
+    glm-5-turbo:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 7.00
+          input_cache_hit_per_1m: 1.80
+          output_per_1m: 26.00
+        USD:
+          input_per_1m: 0.9749
+          input_cache_hit_per_1m: 0.2507
+          output_per_1m: 3.6212
+
+    glm-5:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 6.00
+          input_cache_hit_per_1m: 1.50
+          output_per_1m: 22.00
+        USD:
+          input_per_1m: 0.8357
+          input_cache_hit_per_1m: 0.2089
+          output_per_1m: 3.0641
+
+    glm-4.7:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 4.00
+          input_cache_hit_per_1m: 0.80
+          output_per_1m: 16.00
+        USD:
+          input_per_1m: 0.5571
+          input_cache_hit_per_1m: 0.1114
+          output_per_1m: 2.2284
+
+    glm-4.5-air:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 1.20
+          input_cache_hit_per_1m: 0.24
+          output_per_1m: 8.00
+        USD:
+          input_per_1m: 0.1671
+          input_cache_hit_per_1m: 0.0334
+          output_per_1m: 1.1142
+
+    glm-4.7-flashx:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 0.50
+          input_cache_hit_per_1m: 0.10
+          output_per_1m: 3.00
+        USD:
+          input_per_1m: 0.0696
+          input_cache_hit_per_1m: 0.0139
+          output_per_1m: 0.4178
+
+    glm-4.7-flash:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 0.00
+          input_cache_hit_per_1m: 0.00
+          output_per_1m: 0.00
+        USD:
+          input_per_1m: 0.0
+          input_cache_hit_per_1m: 0.0
+          output_per_1m: 0.0
