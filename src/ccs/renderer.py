@@ -157,7 +157,8 @@ def _fmt_balance(balance: dict) -> str:
 
     DeepSeek (monetary): ``BAL ¥110.00``
     OpenAI (credits):    ``BAL $4.90``
-    MiniMax (quota):     ``BAL general 97%``
+    Zhipu (quota):       ``5H 73%│7D 73%│MO 99%``  (标签自描述，无 BAL 前缀)
+    MiniMax (quota):     ``general 97%│abab6.5 50%``
     """
     ptype = balance.get("type", "")
     label = f"{_DIM}{t('BAL')}{_RESET}"
@@ -171,11 +172,13 @@ def _fmt_balance(balance: dict) -> str:
         return f"{label} \033[33m${amt:.2f}\033[0m"
     if ptype == "quota":
         quotas = balance.get("quotas", [])
+        sep_q = f"{_DIM}│{_RESET}"
         parts = []
         for q in quotas:
             pct = q.get("remaining_pct", 0)
-            parts.append(f"{_health_color(100-pct)}{q['name']} {pct}%{_RESET}")
-        return f"{label} {'│'.join(parts)}"
+            name = q.get("short") or q.get("name", "?")
+            parts.append(f"{_DIM}{name}{_RESET} {_health_color(100-pct)}{pct}%{_RESET}")
+        return sep_q.join(parts)
     return ""
 
 
@@ -188,7 +191,7 @@ def _fmt_official_usage(usage: dict) -> str:
     if monthly:
         parts.append(_fmt_monthly(monthly))
     sep = f"{_DIM}│{_RESET}"
-    return f" {sep} ".join(parts)
+    return sep.join(parts)
 
 
 # ── Model display name ──────────────────────────────────────────────────────
@@ -203,6 +206,8 @@ _BRAND_OVERRIDES: dict[str, str] = {
     "mistral": "Mistral",
     "llama": "LLaMA",
     "mimo": "MIMO",
+    "zhipu": "Zhipu",
+    "glm": "GLM",
 }
 
 
@@ -274,7 +279,6 @@ def render(
     last_cost_str: str,
     pred_cost_str: str,
     pred_output: int,
-    session_start_ts: int | None,
     turn_count: int,
     tool_call_count: int,
     subagent_total: int,
@@ -297,17 +301,35 @@ def render(
     if replay_tokens > 0:
         rp_color = _color_for_replay(replay_tokens, ctx_window_size)
         out_part = f"{_DIM}→{_RESET}{_fmt_tokens(pred_output)}" if pred_output > 0 else ""
-        next_str = f"{t('NEXT')} {rp_color}{_fmt_tokens(replay_tokens)}{_RESET}{out_part} [\033[33m{pred_cost_str}{_RESET}]"
+        next_str = f"{_DIM}{t('NEXT')}{_RESET} {rp_color}{_fmt_tokens(replay_tokens)}{_RESET}{out_part} [\033[33m{pred_cost_str}{_RESET}]"
     else:
-        next_str = f"{t('NEXT')} {_DIM}-{_RESET}"
+        next_str = f"{_DIM}{t('NEXT')}{_RESET} {_DIM}-{_RESET}"
 
     cost_d = f"{_DIM}{t('TOTAL')}{_RESET} \033[33m{cost_str}{_RESET}" if cost_str else ""
     last_d = f"{_DIM}{t('LAST')}{_RESET} \033[33m{last_cost_str}{_RESET}" if last_cost_str else ""
 
     sep = f"{_DIM}│{_RESET}"
-    row1 = f"{model_str} {sep} {ctx_str} {sep} {next_str} {sep} {cost_d} {sep} {last_d}"
 
-    # Row 2: TURNS │ IN │ OUT │ CACHE XX.XXX% amount │ TOOLS │ AGENTS │ duration
+    # Row 1（钱）：MODEL │ LAST │ TOTAL │ NEXT │ [budget]
+    # 时间叙事：刚发生 → 累计 → 预测 → 配额天花板
+    row1_parts = [model_str]
+    if last_d:
+        row1_parts.append(last_d)
+    if cost_d:
+        row1_parts.append(cost_d)
+    row1_parts.append(next_str)
+
+    budget_seg = ""
+    if official_usage:
+        budget_seg = _fmt_official_usage(official_usage)
+    elif balance:
+        budget_seg = _fmt_balance(balance)
+    if budget_seg:
+        row1_parts.append(budget_seg)
+    row1 = sep.join(row1_parts)
+
+    # Row 2（token）：CTX │ IN │ OUT │ CACHE │ TURNS │ TOOLS │ AGENTS │ duration
+    # 上下文压力打头 → token 分解 → 活动计数 → 时长收尾
     if compaction_count > 0:
         turn_str = f"{_DIM}{t('TURNS')}{_RESET} {_BOLD}{turn_count}{_RESET}{_DIM}c{compaction_count}{_RESET}"
     else:
@@ -326,23 +348,7 @@ def render(
     else:
         agent_str = f"{_DIM}{t('AGENTS')}{_RESET} {_MAGENTA}{subagent_total}{_RESET}"
 
-    if session_start_ts:
-        elapsed = int(time.time()) - session_start_ts
-        dur_str = f"{_DIM}{_fmt_duration(elapsed)}{_RESET}"
-    else:
-        dur_str = f"{_DIM}-{_RESET}"
-
-    row2_parts = [turn_str, in_str, out_str, cache_str, tool_str, agent_str, dur_str]
-
-    if official_usage:
-        seg = _fmt_official_usage(official_usage)
-        if seg:
-            row2_parts.append(seg)
-    elif balance:
-        seg = _fmt_balance(balance)
-        if seg:
-            row2_parts.append(seg)
-
-    row2 = f" {sep} ".join(row2_parts)
+    row2_parts = [ctx_str, in_str, out_str, cache_str, turn_str, tool_str, agent_str]
+    row2 = sep.join(row2_parts)
 
     return f"{row1}\n{row2}"

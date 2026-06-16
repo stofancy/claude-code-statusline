@@ -8,6 +8,7 @@ Supported providers:
   - DeepSeek: official ``GET /user/balance`` (API key via ``DEEPSEEK_API_KEY``)
   - OpenAI:   undocumented ``GET /dashboard/billing/credit_grants`` (browser session key via ``OPENAI_SESSION_KEY``)
   - MiniMax:  ``GET /v1/token_plan/remains`` — quota-based (auto-discovers token from mmx CLI state / env)
+  - Zhipu:    ``GET /api/monitor/usage/quota/limit`` — quota-based (API key via ``ZHIPU_API_KEY`` or ``ANTHROPIC_AUTH_TOKEN``)
   - Anthropic: delegated to ``usage.py`` (not duplicated here)
 
 Set ``CCS_BALANCE_API=0`` to disable all network requests.
@@ -31,6 +32,7 @@ _HTTP_TIMEOUT = 4.0
 
 _DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 _OPENAI_CREDIT_URL = "https://api.openai.com/dashboard/billing/credit_grants"
+_ZHIPU_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
 
 # 进程内内存缓存（TTL 内不读磁盘，不发起网络请求）
 _mem_cache: dict | None = None
@@ -94,6 +96,8 @@ def _detect_proxy_provider() -> str | None:
         return "mimo"
     if "minimax" in model_name:
         return "minimax"
+    if "zhipu" in model_name or "glm" in model_name:
+        return "zhipu"
     return None
 
 
@@ -170,6 +174,8 @@ def provider_for(model_id: str) -> str | None:
         return "mimo"
     if "minimax" in mid:
         return "minimax"
+    if "zhipu" in mid or "glm" in mid:
+        return "zhipu"
     return None
 
 
@@ -341,12 +347,91 @@ def _minimax_balance() -> dict | None:
     }
 
 
+# ── Zhipu (GLM) ─────────────────────────────────────────────────────────────
+
+def _glm_api_key() -> str | None:
+    """获取智谱 API Key。依次尝试 ``ZHIPU_API_KEY`` 和 ``ANTHROPIC_AUTH_TOKEN``。"""
+    env_key = os.getenv("ZHIPU_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    return os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip() or None
+
+
+def _glm_balance() -> dict | None:
+    """查询智谱 GLM Coding Plan 配额用量。
+
+    Endpoint: GET https://open.bigmodel.cn/api/monitor/usage/quota/limit
+    Auth: ``Authorization: <API_KEY>`` (Bearer token)
+    Returns quota percentages for time-based and token-based limits.
+    """
+    api_key = _glm_api_key()
+    if not api_key:
+        return None
+
+    req = urllib.request.Request(
+        _ZHIPU_QUOTA_URL,
+        headers={
+            "Authorization": f"{api_key}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            body = resp.read().decode("utf-8")
+            data: dict = json.loads(body)
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+
+    if not data.get("success") and data.get("code") != 200:
+        return None
+
+    nested = data.get("data")
+    if not isinstance(nested, dict):
+        return None
+
+    limits = nested.get("limits")
+    if not isinstance(limits, list) or not limits:
+        return None
+
+    # 按类型计数分配标签——不依赖 API 的跨类型返回顺序。
+    # TOKENS_LIMIT 两条（5小时窗口 / 每周窗口）仅靠出现次序区分。
+    quotas = []
+    token_idx = 0
+    for item in limits:
+        pct = item.get("percentage", 0)
+        remaining_pct = 100 - pct
+        ltype = item.get("type", "")
+        if ltype == "TIME_LIMIT":
+            q = {"name": "MCP每月", "short": "MO", "remaining_pct": remaining_pct,
+                 "usage": item.get("usage"), "currentValue": item.get("currentValue"),
+                 "remaining": item.get("remaining")}
+        elif ltype == "TOKENS_LIMIT":
+            if token_idx == 0:
+                short, full = "5H", "5小时"
+            elif token_idx == 1:
+                short, full = "7D", "每周"
+            else:
+                short, full = f"T{token_idx + 1}", f"Token{token_idx + 1}"
+            token_idx += 1
+            q = {"name": full, "short": short, "remaining_pct": remaining_pct}
+        else:
+            q = {"name": ltype or "?", "short": ltype or "?", "remaining_pct": remaining_pct}
+        quotas.append(q)
+
+    return {
+        "provider": "zhipu",
+        "type": "quota",
+        "quotas": quotas,
+    }
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────
 
 _QUERY_FUNCS: dict[str, callable] = {
     "deepseek": _deepseek_balance,
     "openai": _openai_balance,
     "minimax": _minimax_balance,
+    "zhipu": _glm_balance,
 }
 
 

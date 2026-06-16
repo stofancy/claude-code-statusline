@@ -2,7 +2,6 @@
 
 import json
 import sys
-import time
 
 from . import db
 from . import cost as cost_mod
@@ -162,11 +161,6 @@ def main() -> None:
 
     db_turns = session.get("turn_count") or 0
     turn_count = db_turns if db_turns > 0 else transcript_turns
-    session_start_ts = session.get("started_at")
-    if not session_start_ts:
-        dur_ms = cost_data.get("total_duration_ms", 0) if isinstance(cost_data, dict) else 0
-        if dur_ms:
-            session_start_ts = int(time.time()) - int(dur_ms / 1000)
 
     # Aggregate ALL sessions (main + subagents) for token/cost totals
     agg = db.get_all_totals(session_id)
@@ -215,7 +209,6 @@ def main() -> None:
             last_cost_str=last_cost_str,
             pred_cost_str=pred_cost_str,
             pred_output=pred_output if pred_cost_str != "-" else 0,
-            session_start_ts=session_start_ts,
             turn_count=turn_count,
             tool_call_count=tool_call_count,
             subagent_total=subagent_total,
