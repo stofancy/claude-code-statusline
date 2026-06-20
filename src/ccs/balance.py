@@ -350,39 +350,74 @@ def _minimax_balance() -> dict | None:
 # ── Zhipu (GLM) ─────────────────────────────────────────────────────────────
 
 def _glm_api_key() -> str | None:
-    """获取智谱 API Key。依次尝试 ``ZHIPU_API_KEY`` 和 ``ANTHROPIC_AUTH_TOKEN``。"""
-    env_key = os.getenv("ZHIPU_API_KEY", "").strip()
-    if env_key:
-        return env_key
-    return os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip() or None
+    """获取智谱 API Key。
+
+    Claude Code 兼容环境下，统一认证变量是 ``ANTHROPIC_AUTH_TOKEN`` /
+    ``ANTHROPIC_API_KEY``（而非 provider 专用的 ``ZHIPU_API_KEY``）——通过 cc-switch
+    等代理或直连智谱时，真实 key 通常就在这两个变量里。查找优先级：
+    ``ZHIPU_API_KEY`` → ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY``。
+    """
+    for var in ("ZHIPU_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+        val = os.getenv(var, "").strip()
+        if val:
+            return val
+    return None
+
+
+def _glm_window_quota(short: str, item: dict) -> dict:
+    """百分比窗口型配额（5H / 7D）：``percentage``=已用%，``nextResetTime`` 毫秒→秒。"""
+    nrt = item.get("nextResetTime") or 0
+    return {
+        "kind": "window",
+        "short": short,
+        "used_pct": float(item.get("percentage", 0) or 0),
+        "resets_at": int(nrt // 1000) if nrt else None,
+    }
 
 
 def _glm_balance() -> dict | None:
     """查询智谱 GLM Coding Plan 配额用量。
 
     Endpoint: GET https://open.bigmodel.cn/api/monitor/usage/quota/limit
-    Auth: ``Authorization: <API_KEY>`` (Bearer token)
-    Returns quota percentages for time-based and token-based limits.
+    Auth: 先试 ``Authorization: Bearer <key>``（社区高赞 cc-switch #880），无效再试裸
+    ``<key>``（#1588）—— 参照 MiniMax 双 header 范式。
+
+    真实返回结构（cc-switch issue #1588 验证）::
+
+        {"code":200,"success":true,"data":{
+          "level":"pro",
+          "limits":[
+            {"type":"TOKENS_LIMIT","percentage":<已用%>,"nextResetTime":<毫秒>},   # 1~2 条
+            {"type":"TIME_LIMIT","usage":<总额>,"currentValue":<已用>,
+             "remaining":<剩余>,"nextResetTime":<毫秒>}                          # MCP 每月
+          ]}}
+
+    归一化为 ``type="plan"``（与 MiniMax 的 ``"quota"`` 隔离）：仅取 TOKENS_LIMIT
+    按 ``nextResetTime`` 升序 → 5H(最早重置) / 7D 百分比窗口；TIME_LIMIT 是 MCP
+    工具余额，不显示。``percentage`` 已验证为「已用」百分比。
     """
     api_key = _glm_api_key()
     if not api_key:
         return None
 
-    req = urllib.request.Request(
-        _ZHIPU_QUOTA_URL,
-        headers={
-            "Authorization": f"{api_key}",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
-            body = resp.read().decode("utf-8")
-            data: dict = json.loads(body)
-    except (urllib.error.URLError, ValueError, OSError):
-        return None
+    # 认证双试：智谱对无效 token 返回 HTTP 200 + body{code:401,success:false}，
+    # 不能靠异常判断，需读 body 校验 success。
+    data: dict | None = None
+    for auth_val in (f"Bearer {api_key}", api_key):
+        req = urllib.request.Request(
+            _ZHIPU_QUOTA_URL,
+            headers={"Authorization": auth_val, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+                candidate = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, ValueError, OSError):
+            continue
+        if isinstance(candidate, dict) and candidate.get("success") and candidate.get("code") == 200:
+            data = candidate
+            break
 
-    if not data.get("success") and data.get("code") != 200:
+    if not isinstance(data, dict) or not data.get("success") or data.get("code") != 200:
         return None
 
     nested = data.get("data")
@@ -393,34 +428,24 @@ def _glm_balance() -> dict | None:
     if not isinstance(limits, list) or not limits:
         return None
 
-    # 按类型计数分配标签——不依赖 API 的跨类型返回顺序。
-    # TOKENS_LIMIT 两条（5小时窗口 / 每周窗口）仅靠出现次序区分。
-    quotas = []
-    token_idx = 0
-    for item in limits:
-        pct = item.get("percentage", 0)
-        remaining_pct = 100 - pct
-        ltype = item.get("type", "")
-        if ltype == "TIME_LIMIT":
-            q = {"name": "MCP每月", "short": "MO", "remaining_pct": remaining_pct,
-                 "usage": item.get("usage"), "currentValue": item.get("currentValue"),
-                 "remaining": item.get("remaining")}
-        elif ltype == "TOKENS_LIMIT":
-            if token_idx == 0:
-                short, full = "5H", "5小时"
-            elif token_idx == 1:
-                short, full = "7D", "每周"
-            else:
-                short, full = f"T{token_idx + 1}", f"Token{token_idx + 1}"
-            token_idx += 1
-            q = {"name": full, "short": short, "remaining_pct": remaining_pct}
-        else:
-            q = {"name": ltype or "?", "short": ltype or "?", "remaining_pct": remaining_pct}
-        quotas.append(q)
+    # 仅 token 配额窗口（5H/7D）；TIME_LIMIT 是 MCP 工具余额，不显示。
+    token_limits = sorted(
+        [l for l in limits if isinstance(l, dict) and l.get("type") == "TOKENS_LIMIT"],
+        key=lambda l: l.get("nextResetTime") or 0,
+    )
+
+    quotas: list[dict] = []
+    if len(token_limits) >= 1:
+        quotas.append(_glm_window_quota("5H", token_limits[0]))
+    if len(token_limits) >= 2:
+        quotas.append(_glm_window_quota("7D", token_limits[1]))
+
+    if not quotas:
+        return None
 
     return {
         "provider": "zhipu",
-        "type": "quota",
+        "type": "plan",
         "quotas": quotas,
     }
 

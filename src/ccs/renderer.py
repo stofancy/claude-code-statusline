@@ -157,7 +157,7 @@ def _fmt_balance(balance: dict) -> str:
 
     DeepSeek (monetary): ``BAL ¥110.00``
     OpenAI (credits):    ``BAL $4.90``
-    Zhipu (quota):       ``5H 73%│7D 73%│MO 99%``  (标签自描述，无 BAL 前缀)
+    Zhipu (plan):        ``5时 46%│7天 59%``
     MiniMax (quota):     ``general 97%│abab6.5 50%``
     """
     ptype = balance.get("type", "")
@@ -178,6 +178,13 @@ def _fmt_balance(balance: dict) -> str:
             pct = q.get("remaining_pct", 0)
             name = q.get("short") or q.get("name", "?")
             parts.append(f"{_DIM}{name}{_RESET} {_health_color(100-pct)}{pct}%{_RESET}")
+        return sep_q.join(parts)
+    if ptype == "plan":
+        quotas = balance.get("quotas", [])
+        sep_q = f"{_DIM}│{_RESET}"
+        # 仅已用百分比（resets_at 传 None 省略倒计时，保持整行紧凑）
+        parts = [_fmt_window(q.get("short", "?"), q.get("used_pct"), None)
+                 for q in quotas]
         return sep_q.join(parts)
     return ""
 
