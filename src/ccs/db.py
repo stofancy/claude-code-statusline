@@ -136,19 +136,26 @@ def update_session_tokens(sid: str, metrics: dict) -> None:
 
 
 def update_model_usage(sid: str, model_usage: dict) -> None:
-    """直接写入按模型分解的 token 值到 model_usage 表。
+    """按模型 upsert token 值到 model_usage 表。
 
-    先删后写——防止旧映射键残留导致重复累加（如旧键 claude-opus-4-8-2
-    和新键 deepseek-v4-pro 同时存在，get_model_breakdown 会把两者都计入）。"""
+    增量更新：仅覆写传入的模型行，不删除未传入的模型——支持多次部分更新
+    （如某轮只解析到主模型，不应清空上一轮已记录的子代理模型）。模型映射在
+    调用方（statusline.py）完成，写入的 model_id 已是实际模型名。
+    """
     c = _conn()
     try:
         now = int(time.time())
-        c.execute("DELETE FROM model_usage WHERE session_id=?", (sid,))
         for model_id, m in model_usage.items():
             c.execute("""INSERT INTO model_usage
                 (session_id, model_id, tot_input_tokens, tot_output_tokens,
                  tot_cache_read_tokens, tot_cache_write_tokens, last_snapshot, last_updated)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id, model_id) DO UPDATE SET
+                    tot_input_tokens=excluded.tot_input_tokens,
+                    tot_output_tokens=excluded.tot_output_tokens,
+                    tot_cache_read_tokens=excluded.tot_cache_read_tokens,
+                    tot_cache_write_tokens=excluded.tot_cache_write_tokens,
+                    last_updated=excluded.last_updated""",
                       (sid, model_id, m.get("input", 0), m.get("output", 0),
                        m.get("cache_read", 0), m.get("cache_write", 0), 0, now))
         c.commit()
