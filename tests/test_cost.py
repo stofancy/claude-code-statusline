@@ -101,6 +101,46 @@ def test_opus_4_8_does_not_fallback_to_opus_4_legacy_pricing():
         )
 
 
+def test_opus_4_8_dot_form_resolves_to_correct_pricing():
+    """claude-opus-4.8（点号形式）应归一化为 claude-opus-4-8 并命中 $5/$25 定价块。
+
+    根因：Claude Code 在 transcript 的 message.model 里把模型名写成点号形式
+    （claude-opus-4.8、claude-haiku-4.5，实测占 99% 条目），而 pricing.yaml
+    的键全是连字符形式（claude-opus-4-8）。修复前候选生成只按 '-' 分段：
+      claude-opus-4.8 → claude-opus → claude  ← 永远到不了 claude-opus-4-8
+    于是落入 _DEFAULT_PRICING（$1/$4/$0.1 且无 cache_write），低估近一个数量级。
+    """
+    price, price_currency, _ = _resolve("claude-opus-4.8")
+    assert price_currency == "USD", f"预期价格货币为 USD，实际为 {price_currency!r}"
+    assert price.get("input_per_1m") == 5.00, (
+        f"claude-opus-4.8 input 应为 $5.00，实际为 {price.get('input_per_1m')}（落入默认价 = bug）"
+    )
+    assert price.get("output_per_1m") == 25.00, (
+        f"claude-opus-4.8 output 应为 $25.00，实际为 {price.get('output_per_1m')}"
+    )
+    assert price.get("cache_write_per_1m") == 6.25, (
+        f"claude-opus-4.8 应有 cache_write=$6.25，实际为 {price.get('cache_write_per_1m')}"
+    )
+
+
+def test_haiku_4_5_dot_form_resolves_to_correct_pricing():
+    """claude-haiku-4.5（点号形式）应归一化为 claude-haiku-4-5 并命中真实定价块。
+
+    注意：haiku 的真实 input 价恰为 $1.00，与默认价 input 撞值，不能用 input
+    判别。改用默认价不具备的特征字段：output=$5.00（默认 $4.00）且存在
+    cache_write_per_1m=$1.25（默认价无此字段）。
+    """
+    price, _, _ = _resolve("claude-haiku-4.5")
+    assert price.get("output_per_1m") == 5.00, (
+        f"claude-haiku-4.5 output 应为 $5.00，实际为 {price.get('output_per_1m')}"
+        f"（落入默认价 $4.00 = bug）"
+    )
+    assert price.get("cache_write_per_1m") == 1.25, (
+        f"claude-haiku-4.5 应有 cache_write=$1.25，默认价无此字段，"
+        f"实际为 {price.get('cache_write_per_1m')}（bug）"
+    )
+
+
 def test_opus_4_legacy_pricing_still_works():
     """确认 claude-opus-4 自身仍保留 $15/$75 历史定价（不应被修复误伤）。"""
     price, _, _ = _resolve("claude-opus-4")

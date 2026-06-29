@@ -513,7 +513,14 @@ def get_balance(model_id: str) -> dict | None:
         and cached_provider == provider
         and (now - fetched_at) < ttl
     )
-    backoff = cached_data is not None and (now - last_attempt) < _RETRY_BACKOFF
+    # backoff 必须同时校验 provider 一致：否则后端切换（如 zhipu→deepseek）
+    # 后的 60s 退避窗口内，会把上一个 provider 的余额/配额当成当前 provider
+    # 的数据返回，导致状态行串味显示错误余额。
+    backoff = (
+        cached_data is not None
+        and cached_provider == provider
+        and (now - last_attempt) < _RETRY_BACKOFF
+    )
 
     if fresh or backoff:
         _mem_cache, _mem_cache_provider, _mem_cache_fetched = cached_data, provider, now
@@ -531,6 +538,11 @@ def get_balance(model_id: str) -> dict | None:
         _mem_cache, _mem_cache_provider, _mem_cache_fetched = data, provider, now
         return data
 
-    cache["last_attempt"] = now
-    _write_cache(cache)
-    return cached_data
+    # 网络失败兜底：仅当缓存属于当前 provider 时才沿用旧值，否则返回 None。
+    # 跨 provider 时返回 cached_data 会再次串味（显示上一个后端的余额）；
+    # 且只在 provider 一致时刷新 last_attempt，避免延长无关 provider 的退避寿命。
+    if cached_provider == provider:
+        cache["last_attempt"] = now
+        _write_cache(cache)
+        return cached_data
+    return None

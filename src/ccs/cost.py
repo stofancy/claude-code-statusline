@@ -80,6 +80,14 @@ import yaml
 #   claude-opus-4-8[1M]        → claude-opus-4-8    （大写，同上）
 _CACHE_SUFFIX_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 
+# 把版本号中的点号改写为短横线：``claude-opus-4.8`` → ``claude-opus-4-8``。
+# 仅匹配「数字.数字」边界，确保只动版本分隔符，不影响 id 其它位置可能
+# 合法出现的点号。背景：Claude Code 写入 JSONL transcript 的
+# ``message.model`` 用点号形式（``claude-opus-4.8`` / ``claude-haiku-4.5``），
+# 而定价表键名用短横线形式（``claude-opus-4-8``）。不归一化则点号形式
+# 永远命中不到价表、落入默认定价（约 10 倍少算）。
+_DOT_VERSION_RE = re.compile(r"(?<=\d)\.(?=\d)")
+
 _BUILTIN_PRICING = Path(__file__).parent / "pricing.yaml"
 _USER_PRICING = Path.home() / ".claude" / "statusline" / "pricing.yaml"
 # 默认定价（未知模型的后备）。注意：不包含 cache_write_per_1m，
@@ -236,19 +244,33 @@ def _resolve_price(
     if stripped != model_id:
         candidates.append(stripped)
 
+    # Normalize dot-delimited version numbers to dashes. Claude Code writes
+    # the model into the JSONL transcript's ``message.model`` as a *dot*
+    # form (``claude-opus-4.8``, ``claude-haiku-4.5``) while the pricing
+    # table keys are *dash* form (``claude-opus-4-8``). The ``.`` only
+    # appears between digits (version separator: ``4.8`` → ``4-8``), so a
+    # digit-bounded substitution rewrites the version without touching any
+    # other ``.`` (e.g. proxy ids that legitimately contain dots elsewhere).
+    # Without this, ``claude-opus-4.8`` never reaches ``claude-opus-4-8``:
+    # the ``-``-segment stripping below degrades it to ``claude-opus`` →
+    # ``claude`` and it falls into _DEFAULT_PRICING (≈10× under-count).
+    normalized = _DOT_VERSION_RE.sub("-", stripped)
+    if normalized != stripped:
+        candidates.append(normalized)
+
     # Strip /-delimited proxy prefixes (openrouter/, opencode/, etc.).
     # For a model id like "openrouter/anthropic/claude-opus-4-8", this
     # appends "anthropic/claude-opus-4-8" and "claude-opus-4-8" as
     # candidates — the rightmost segment is the real model id that
-    # matches the pricing table. We use `stripped` (the post-[1m] form)
-    # so that proxy + cache-suffix combinations like
-    # "openrouter/.../claude-opus-4-8[1m]" resolve correctly.
-    if "/" in stripped:
-        segments = stripped.split("/")
+    # matches the pricing table. We use the normalized (post-[1m],
+    # dot→dash) form so that proxy + cache-suffix + dot-version
+    # combinations like "openrouter/.../claude-opus-4.8[1m]" resolve.
+    if "/" in normalized:
+        segments = normalized.split("/")
         for i in range(1, len(segments)):
             candidates.append("/".join(segments[i:]))
 
-    parts = stripped.split("-")
+    parts = normalized.split("-")
     while len(parts) > 1:
         parts.pop()
         candidates.append("-".join(parts))
