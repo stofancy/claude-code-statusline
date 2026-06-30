@@ -80,69 +80,65 @@ if (-not (Test-Path $ccsStatusline)) {
 Write-Green "✓ ccs-statusline → $ccsStatusline"
 Write-Green "✓ ccs-tracker   → $ccsTracker"
 
-# 4. Print suggested settings.json snippet using bash-friendly ~ paths.
-#    Claude Code invokes hooks via bash; backslash paths get mangled, so the
-#    snippet uses forward-slash ~ paths that bash expands correctly on Windows.
-$snippet = @'
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/statusline/venv/Scripts/ccs-tracker.exe --event stop" }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/statusline/venv/Scripts/ccs-tracker.exe --event tool" }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/statusline/venv/Scripts/ccs-tracker.exe --event tool" }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/statusline/venv/Scripts/ccs-tracker.exe --event subagent-start" }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "~/.claude/statusline/venv/Scripts/ccs-tracker.exe --event subagent-stop" }
-        ]
-      }
-    ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "~/.claude/statusline/venv/Scripts/ccs-statusline.exe",
-    "padding": 2,
-    "refreshInterval": 15
-  }
+# 4. Auto-merge hooks + statusLine into ~/.claude/settings.json.
+#    Claude Code invokes hooks via bash; backslash paths get mangled, so we use
+#    forward-slash ~ paths that bash expands correctly on Windows.
+$settingsPath = Join-Path $HOME '.claude\settings.json'
+$base = '~/.claude/statusline/venv/Scripts'
+
+# Load existing settings (PS7 -AsHashtable gives a mutable, recursive hashtable)
+# or start fresh. Anything that won't parse is treated as empty so we never crash.
+if (Test-Path $settingsPath) {
+    try {
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json -AsHashtable
+    } catch {
+        Write-Red "Warning: existing settings.json is not valid JSON; backing it up and starting fresh."
+        $settings = $null
+    }
+} else {
+    New-Item -ItemType Directory -Force (Split-Path $settingsPath) | Out-Null
 }
-'@
+if (-not $settings) { $settings = @{} }
+if (-not $settings.ContainsKey('hooks') -or $settings['hooks'] -isnot [hashtable]) {
+    $settings['hooks'] = @{}
+}
+
+# Append our hook for an event while preserving unrelated hooks and staying
+# idempotent: drop any prior entry that referenced our ccs- binaries first.
+function Merge-CcsHook([hashtable]$cfg, [string]$event, [string]$cmd) {
+    $kept = @()
+    if ($cfg['hooks'].ContainsKey($event)) {
+        $kept = @($cfg['hooks'][$event] | Where-Object {
+            -not ($_.hooks | Where-Object { $_.command -match 'ccs-tracker|ccs-statusline' })
+        })
+    }
+    $kept += @{ matcher = ''; hooks = @(@{ type = 'command'; command = $cmd }) }
+    $cfg['hooks'][$event] = $kept
+}
+
+Merge-CcsHook $settings 'Stop'          "$base/ccs-tracker.exe --event stop"
+Merge-CcsHook $settings 'PostToolUse'   "$base/ccs-tracker.exe --event tool"
+Merge-CcsHook $settings 'SubagentStart' "$base/ccs-tracker.exe --event subagent-start"
+Merge-CcsHook $settings 'SubagentStop'  "$base/ccs-tracker.exe --event subagent-stop"
+
+$settings['statusLine'] = @{
+    type            = 'command'
+    command         = "$base/ccs-statusline.exe"
+    padding         = 2
+    refreshInterval = 15
+}
+
+# Back up before overwriting, then write UTF-8 without BOM (Claude Code's JSON
+# parser chokes on a BOM).
+if (Test-Path $settingsPath) {
+    Copy-Item $settingsPath "$settingsPath.bak" -Force
+    Write-Cyan "→ Backed up existing settings to $settingsPath.bak"
+}
+$json = $settings | ConvertTo-Json -Depth 20
+[System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host ''
-Write-Cyan '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-Write-Bold 'Merge the following into ~/.claude/settings.json:'
-Write-Cyan '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-Write-Host ''
-Write-Host $snippet
-Write-Host ''
+Write-Green "✓ Merged hooks + statusLine into $settingsPath"
 Write-Green '✓ Installation complete.'
 Write-Host ''
 Write-Bold 'Optional environment variables:'
