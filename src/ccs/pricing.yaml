@@ -1,6 +1,6 @@
 # Claude Code Statusline — Multi-Provider Pricing Table
 #
-# Verified against official sources on 2026-05-12:
+# Verified against official sources on 2026-05-12 (Anthropic Sonnet 5 added 2026-07-01):
 #   • Anthropic: https://platform.claude.com/docs/en/docs/about-claude/pricing
 #   • DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 #   • OpenAI:    https://openai.com/api/pricing/
@@ -99,6 +99,15 @@ providers:
       cache_write_per_1m: 18.75
       cache_read_per_1m: 1.50
       output_per_1m: 75.00
+
+    # Sonnet 5 introductory pricing ($2/$10) runs through 2026-08-31, then
+    # reverts to standard $3/$15 (same as Sonnet 4.6/4.5) on 2026-09-01.
+    # https://platform.claude.com/docs/en/about-claude/pricing#claude-sonnet-5-introductory-pricing
+    claude-sonnet-5:
+      input_per_1m: 2.00
+      cache_write_per_1m: 2.50
+      cache_read_per_1m: 0.20
+      output_per_1m: 10.00
 
     claude-sonnet-4-6:
       input_per_1m: 3.00
