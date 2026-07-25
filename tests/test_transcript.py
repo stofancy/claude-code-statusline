@@ -1,6 +1,6 @@
-"""transcript.py: turn 边界平滑 + NEXT 不翻倍。
+"""transcript.py: 稳态 context_len + NEXT 不翻倍 + 轮次语义。
 
-Run: python -m pytest tests/test_transcript.py -v
+Run: python -m unittest tests.test_transcript -v
 """
 
 import json
@@ -36,6 +36,17 @@ def _user_tool_result(ts: str) -> dict:
             "timestamp": ts}
 
 
+def _user_multi_tool_results(ts: str) -> dict:
+    """多个无 text 的 block——旧 _extract_text 会拼出 '\\n' 假阳性。"""
+    return {"type": "user",
+            "message": {"role": "user",
+                        "content": [
+                            {"type": "tool_result", "content": "a", "tool_use_id": "1"},
+                            {"type": "tool_result", "content": "b", "tool_use_id": "2"},
+                        ]},
+            "timestamp": ts}
+
+
 def _assistant(ts: str, msg_id: str,
                it: int, cr: int, cw: int, ot: int = 50) -> dict:
     return {"type": "assistant",
@@ -54,95 +65,192 @@ def _assistant(ts: str, msg_id: str,
             "timestamp": ts}
 
 
-class TestContextLenMaxInTurn(unittest.TestCase):
+class TestContextLenStableRecent(unittest.TestCase):
     def setUp(self):
         tx._metrics_cache.clear()
         tx._cache.clear()
 
-    def test_max_in_turn_not_pulled_back_by_later_small_input(self):
-        """同 turn 内第一次调用很大,后续调用 cache 命中比例变高、input 变小,
-        CTX 不应被拉回。"""
+    def test_uses_most_recent_stable_not_turn_max(self):
+        """context_len 取最近稳态，而不是历史峰值。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "first"),
-                # m1: 第一次处理该 prompt,cache 还没建好,input 较大
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),  # total 400100
-                # m2: cache 命中比例上升,input 变小 —— 之前会把这个当 context
-                _assistant("2024-01-01T10:00:02.000Z", "m2", 100, 100_000, 0),  # total 100100
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),
+                _assistant("2024-01-01T10:00:02.000Z", "m2", 100, 100_000, 0),
             ]
             _write(path, events)
-
             m = get_session_metrics(str(path))
-            # 取 turn 内最大值 = 400100,不是最近一次的 100100
-            self.assertEqual(m["context_len"], 400_100)
+            self.assertEqual(m["context_len"], 100_100)
+
+    def test_cold_cache_spike_does_not_lock_context_len(self):
+        """cache rebuild 尖峰（含后续恢复）不应锁住 CTX。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "work"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1",
+                           it=11_497, cr=217_326, cw=294),
+                _assistant("2024-01-01T10:00:02.000Z", "m2",
+                           it=55, cr=0, cw=567_315),
+                _assistant("2024-01-01T10:00:03.000Z", "m3",
+                           it=11_580, cr=217_748, cw=551),
+                _assistant("2024-01-01T10:00:04.000Z", "m4",
+                           it=11_573, cr=218_594, cw=229),
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 230_396)
+
+            # tip 落在尖峰：无后继时靠 rebuild 形态回落
+            path2 = Path(tmp) / "s2.jsonl"
+            _write(path2, events[:3])
+            tx._metrics_cache.clear()
+            tx._cache.clear()
+            m2 = get_session_metrics(str(path2))
+            self.assertEqual(m2["context_len"], 229_117)
+
+    def test_residual_cache_read_spike_filtered_with_next(self):
+        """带 residual cache_read 的尖峰，有后继回到稳态时应被过滤。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "work"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1",
+                           it=10_000, cr=200_000, cw=0),
+                _assistant("2024-01-01T10:00:02.000Z", "m2",
+                           it=50, cr=1_000, cw=500_000),  # 501050
+                _assistant("2024-01-01T10:00:03.000Z", "m3",
+                           it=10_000, cr=201_000, cw=0),  # 211000
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 211_000)
+
+    def test_out_of_order_timestamps_use_time_not_file_order(self):
+        """main 调用按 timestamp 排序，而非 JSONL 文件顺序。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "hi"),
+                # 文件里先写较新的大值，再写较旧的小值
+                _assistant("2024-01-01T10:00:02.000Z", "m2", 100, 300_000, 0),
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 100_000, 0),
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 300_100)
 
     def test_fallback_to_most_recent_when_no_new_calls_in_turn(self):
-        """用户刚发完消息、模型还没响应 —— 当前 turn 内无新调用,
-        应 fallback 到上一轮的最近一次 main 调用。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "first"),
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 50_000, 0),  # 50100
-                _user_text("2024-01-01T10:00:02.000Z", "second"),  # 尚无新调用
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 50_000, 0),
+                _user_text("2024-01-01T10:00:02.000Z", "second"),
             ]
             _write(path, events)
-
             m = get_session_metrics(str(path))
             self.assertEqual(m["context_len"], 50_100)
 
     def test_tool_result_user_msg_not_treated_as_turn_start(self):
-        """tool_result 是 type=user 但 content 不是 text,不能被当成 turn 起点,
-        否则会把 turn 切断成两半。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "first"),
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),  # 400100
-                # tool_result: 不应被识别为 turn 起点
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),
                 _user_tool_result("2024-01-01T10:00:02.000Z"),
-                _assistant("2024-01-01T10:00:03.000Z", "m2", 200, 410_000, 0),  # 410200
+                _assistant("2024-01-01T10:00:03.000Z", "m2", 200, 410_000, 0),
             ]
             _write(path, events)
-
             m = get_session_metrics(str(path))
-            # turn 起点仍是 10:00:00 的 user_text,m1 和 m2 都在该 turn 内
-            # max = 410200
             self.assertEqual(m["context_len"], 410_200)
+            # 轮次只计文本 user
+            self.assertEqual(m["turn_count"], 1)
 
-    def test_new_user_msg_resets_turn(self):
-        """新 user 消息到来后,turn 起点更新 —— 旧 turn 的 m1 不再算 max。"""
+    def test_multi_tool_result_not_counted_as_turn(self):
+        """多个 tool_result 不得因 '\\n' 假阳性计入轮次。"""
+        self.assertEqual(tx._extract_text(_user_multi_tool_results("t")), "")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "first"),
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 500_000, 0),  # 500100
-                _user_text("2024-01-01T10:00:02.000Z", "second"),
-                _assistant("2024-01-01T10:00:03.000Z", "m2", 100, 50_000, 0),  # 50100
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 50_000, 0),
+                _user_multi_tool_results("2024-01-01T10:00:02.000Z"),
+                _assistant("2024-01-01T10:00:03.000Z", "m2", 100, 51_000, 0),
             ]
             _write(path, events)
-
             m = get_session_metrics(str(path))
-            # 当前 turn 从 second 开始,max = 50100(m1 属于上一 turn,不算)
-            self.assertEqual(m["context_len"], 50_100)
+            self.assertEqual(m["turn_count"], 1)
 
-    def test_compaction_does_not_inflate_turn_max(self):
-        """压缩后 turn 内 max 应回到压缩后水平,而不是保留压缩前的峰值。"""
+    def test_slash_command_echo_not_counted_as_turn(self):
+        """/model 等本地命令回显不是对话轮次。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "hello"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 10_000, 0),
+                _user_text("2024-01-01T10:00:02.000Z",
+                           "<command-name>/model</command-name>\n"
+                           "<command-message>model</command-message>"),
+                _user_text("2024-01-01T10:00:03.000Z",
+                           "<local-command-stdout>Set model to Opus</local-command-stdout>"),
+                _user_text("2024-01-01T10:00:04.000Z", "continue please"),
+                _assistant("2024-01-01T10:00:05.000Z", "m2", 100, 11_000, 0),
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["turn_count"], 2)
+
+    def test_new_user_msg_uses_latest_after_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "first"),
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 800_000, 0),  # 800100
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 500_000, 0),
+                _user_text("2024-01-01T10:00:02.000Z", "second"),
+                _assistant("2024-01-01T10:00:03.000Z", "m2", 100, 50_000, 0),
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 50_100)
+            self.assertEqual(m["turn_count"], 2)
+
+    def test_compaction_uses_post_compact_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "first"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 800_000, 0),
                 {"type": "system", "subtype": "compact_boundary",
                  "timestamp": "2024-01-01T10:00:01.500Z"},
-                _assistant("2024-01-01T10:00:02.000Z", "m2", 100, 30_000, 0),   # 30100
+                _assistant("2024-01-01T10:00:02.000Z", "m2", 100, 30_000, 0),
             ]
             _write(path, events)
-
             m = get_session_metrics(str(path))
-            # turn 内 max = 800100,m2 之后会再变,但当前 turn 内的 max 就是 800100
-            self.assertEqual(m["context_len"], 800_100)
+            self.assertEqual(m["context_len"], 30_100)
+
+    def test_subagent_turns_not_merged_into_main_turn_count(self):
+        """子代理 token 合并，但 turn_count / context_len 保持主会话。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main = root / "sess.jsonl"
+            sub_dir = root / "sess" / "subagents"
+            sub_dir.mkdir(parents=True)
+            _write(main, [
+                _user_text("2024-01-01T10:00:00.000Z", "main"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 10_000, 0),
+            ])
+            _write(sub_dir / "agent-x.jsonl", [
+                _user_text("2024-01-01T10:00:02.000Z", "sub1"),
+                _assistant("2024-01-01T10:00:03.000Z", "s1", 500, 0, 0),
+                _user_text("2024-01-01T10:00:04.000Z", "sub2"),
+                _assistant("2024-01-01T10:00:05.000Z", "s2", 700, 0, 0),
+            ])
+            m = get_session_metrics(str(main))
+            self.assertEqual(m["turn_count"], 1)
+            self.assertEqual(m["context_len"], 10_100)
+            self.assertEqual(m["input"], 100 + 500 + 700)
 
 
 class TestNextReplayProjection(unittest.TestCase):
@@ -151,96 +259,91 @@ class TestNextReplayProjection(unittest.TestCase):
         tx._cache.clear()
 
     def test_next_not_double_current_context(self):
-        """修复前:NEXT = current + latest_call_input ≈ 2× current。
-        修复后:NEXT = current + avg_growth,接近 current。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "hi"),
-                # 两次调用,growth = 50K
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 1000, 400_000, 0),  # 401000
-                _assistant("2024-01-01T10:00:02.000Z", "m2", 2000, 450_000, 0),  # 452000
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 1000, 400_000, 0),
+                _assistant("2024-01-01T10:00:02.000Z", "m2", 2000, 450_000, 0),
             ]
             _write(path, events)
-
-            # max in turn = 452000,avg_growth = 51000
             r = estimate_next_replay(
                 str(path),
-                latest_call_input=452_000,   # 修复前会触发双倍 bug
+                latest_call_input=452_000,
                 total_input_tokens=0,
                 current_context_len=452_000,
             )
-            # NEXT 应该是 ~452000 + 51000 ≈ 503000,不是 ~904000
             self.assertLess(r["estimated_tokens"], 600_000)
             self.assertGreaterEqual(r["estimated_tokens"], 452_000)
 
     def test_next_with_no_deltas_falls_back_to_min(self):
-        """没有正 delta(对话稳定)时,NEXT = current + MIN_NEXT_DELTA。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "hi"),
-                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),  # 400100
+                _assistant("2024-01-01T10:00:01.000Z", "m1", 100, 400_000, 0),
             ]
             _write(path, events)
-
             r = estimate_next_replay(
                 str(path),
                 latest_call_input=400_100,
                 current_context_len=400_100,
             )
-            # 无 delta(只有一次调用),NEXT = 400100 + MIN_NEXT_DELTA
             self.assertEqual(r["estimated_tokens"], 400_100 + tx.MIN_NEXT_DELTA)
 
     def test_next_fallback_to_latest_call_input_without_transcript(self):
-        """transcript 不可用时,NEXT = latest_call_input(不再叠加 +latest_call_input)。"""
         r = estimate_next_replay(
             None,
             latest_call_input=300_000,
-            current_context_len=0,  # 触发 fallback 分支
+            current_context_len=0,
         )
         self.assertEqual(r["estimated_tokens"], 300_000)
 
     def test_cache_write_to_cache_read_transition_not_inflating_deltas(self):
-        """cache_write → cache_read 转换不应产生虚假大增量。
-
-        同一段 context 在首次调用时以 cache_write 形式出现（写入缓存），
-        后续调用以 cache_read 形式出现（命中缓存）。两种表示下总上下文
-        大小相同，delta 应接近 0，而不是 ≈ cache_write 的大小。
-        修复前 _context_growth_deltas 漏掉了 cache_write，导致第一次调用
-        total 很小（只有 input），第二次调用 total 很大（input + cache_read），
-        产生 ≈80000 的虚假 delta，最终让 NEXT 翻倍。
-        """
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.jsonl"
             events = [
                 _user_text("2024-01-01T10:00:00.000Z", "hello"),
-                # 第一次调用: 建立缓存，大部分 input 写成 cache
                 _assistant("2024-01-01T10:00:01.000Z", "m1",
-                           it=2750, cr=0, cw=80000),   # 真实 total = 82750
-                # 第二次调用: 命中缓存
+                           it=2750, cr=0, cw=80000),
                 _assistant("2024-01-01T10:00:02.000Z", "m2",
-                           it=2000, cr=80000, cw=0),    # 真实 total = 82000
-                # 第三次调用: 上下文少量增长
+                           it=2000, cr=80000, cw=0),
                 _assistant("2024-01-01T10:00:03.000Z", "m3",
-                           it=2200, cr=80500, cw=0),    # 真实 total = 82700
+                           it=2200, cr=80500, cw=0),
             ]
             _write(path, events)
-
-            # context_len = max in turn = 82750 (第一次调用的真实值)
             m = get_session_metrics(str(path))
-            self.assertEqual(m["context_len"], 82750)
-
+            self.assertEqual(m["context_len"], 82700)
             r = estimate_next_replay(
                 str(path),
                 latest_call_input=0,
-                current_context_len=82750,
+                current_context_len=82700,
             )
-            # NEXT 应该接近当前 context，不应被虚假 delta 推到翻倍
-            # 合理范围: context_len + 少量真实增长 + MIN_NEXT_DELTA 余量
-            self.assertLess(r["estimated_tokens"], 90_000,
-                            "NEXT 不应该因 cache_write→cache_read 转换而翻倍")
-            self.assertGreaterEqual(r["estimated_tokens"], 82750)
+            self.assertLess(r["estimated_tokens"], 90_000)
+            self.assertGreaterEqual(r["estimated_tokens"], 82700)
+
+    def test_cold_cache_spike_excluded_from_next_growth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.jsonl"
+            events = [
+                _user_text("2024-01-01T10:00:00.000Z", "work"),
+                _assistant("2024-01-01T10:00:01.000Z", "m1",
+                           it=11_000, cr=218_000, cw=200),
+                _assistant("2024-01-01T10:00:02.000Z", "m2",
+                           it=55, cr=0, cw=567_000),
+                _assistant("2024-01-01T10:00:03.000Z", "m3",
+                           it=11_100, cr=218_500, cw=200),
+            ]
+            _write(path, events)
+            m = get_session_metrics(str(path))
+            self.assertEqual(m["context_len"], 229_800)
+            r = estimate_next_replay(
+                str(path),
+                current_context_len=m["context_len"],
+            )
+            # 真实增长仅 ~600；NEXT 应贴近 229.8k，绝不能到 250k+
+            self.assertLess(r["estimated_tokens"], 232_000)
+            self.assertGreaterEqual(r["estimated_tokens"], 229_800)
 
 
 if __name__ == "__main__":

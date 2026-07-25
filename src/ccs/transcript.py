@@ -26,6 +26,96 @@ def _context_total(usage: dict) -> int:
             (usage.get("cache_creation_input_tokens", 0) or 0))
 
 
+def _looks_like_cache_rebuild(usage: dict) -> bool:
+    """usage 是否像 prompt-cache 整段重建（非稳态上下文窗口大小）。
+
+    特征：token 主体是 cache_creation；非缓存 input 极小；允许少量 residual
+    cache_read（旧启发式要求 cr==0，会被 cr=1000 的变种穿透）。
+    """
+    total = _context_total(usage)
+    if total <= 0:
+        return False
+    it = usage.get("input_tokens", 0) or 0
+    cr = usage.get("cache_read_input_tokens", 0) or 0
+    cw = usage.get("cache_creation_input_tokens", 0) or 0
+    if cw <= 0:
+        return False
+    # 主体应是 cache write（≥80%）
+    if cw * 5 < total * 4:
+        return False
+    # residual cache_read 不得超过 5% 或 2k
+    if cr > max(2000, total // 20):
+        return False
+    # 非缓存 input 只应是骨架
+    if it > max(200, total // 50):
+        return False
+    return True
+
+
+def _is_transient_context_spike(
+    prev_total: int,
+    cur_total: int,
+    next_total: int | None,
+    usage: dict,
+) -> bool:
+    """判断 cur 是否为短暂抬高 context_len 的尖峰，而非真实窗口增长。
+
+    优先用邻域共识：相对 prev 显著抬升，且 next 回到 prev 附近 → 尖峰。
+    无 next（当前 tip）时，仅在 cache-rebuild 形态 + 大幅抬升时判定为尖峰，
+    避免把真实的大附件/长上下文增长误杀。
+    """
+    if prev_total <= 0 or cur_total <= prev_total:
+        return False
+
+    jumped = cur_total >= int(prev_total * 1.5) or (cur_total - prev_total) >= 50_000
+    if not jumped:
+        return False
+
+    if next_total is not None and next_total > 0:
+        # next 回到 prev 一带（15% 或 5k 容差）→ 明确的尖峰
+        band = max(int(prev_total * 0.15), 5_000)
+        if abs(next_total - prev_total) <= band:
+            return True
+        # next 远小于 cur，且比 cur 更接近 prev
+        if (next_total * 10 < cur_total * 7 and
+                abs(next_total - prev_total) < abs(cur_total - prev_total)):
+            return True
+        return False
+
+    # tip：没有后继佐证，只过滤 cache-rebuild 形态的大幅抬升
+    return _looks_like_cache_rebuild(usage)
+
+
+def _pick_stable_context_len(usages: list[dict]) -> int:
+    """从按时间排序的 usage 序列中选取最近一次非尖峰上下文长度。"""
+    if not usages:
+        return 0
+    totals = [_context_total(u) for u in usages]
+    n = len(totals)
+    for i in range(n - 1, -1, -1):
+        prev_t = totals[i - 1] if i > 0 else 0
+        next_t = totals[i + 1] if i + 1 < n else None
+        if i > 0 and _is_transient_context_spike(prev_t, totals[i], next_t, usages[i]):
+            continue
+        return totals[i]
+    return totals[-1]
+
+
+def _stable_context_totals(usages: list[dict]) -> list[int]:
+    """去掉短暂尖峰后的上下文长度序列，供 NEXT 增长估算使用。"""
+    if not usages:
+        return []
+    totals = [_context_total(u) for u in usages]
+    out: list[int] = []
+    for i, t in enumerate(totals):
+        prev_t = totals[i - 1] if i > 0 else 0
+        next_t = totals[i + 1] if i + 1 < len(totals) else None
+        if i > 0 and _is_transient_context_spike(prev_t, t, next_t, usages[i]):
+            continue
+        out.append(t)
+    return out
+
+
 def _estimate_tokens(text: str) -> int:
     """估算文本 token 数。英文 ~4 char/token，CJK ~1.5 char/token。
     用 Unicode 范围检测混合文本比例，加权取平均字符/token 比率。"""
@@ -43,14 +133,25 @@ def _extract_text(ev: dict) -> str:
 
     此函数用于 turn 边界检测——tool_result 虽然 type=user 但不代表
     新 turn 起点，必须通过此函数过滤掉。
+    只收集非空 text；多个无 text 块不得拼出 "\\n" 这种假阳性。
     """
     msg = ev.get("message", {})
     content = msg.get("content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [block.get("text", "") if isinstance(block, dict) else str(block)
-                 for block in content]
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                if isinstance(block, str) and block:
+                    parts.append(block)
+                continue
+            btype = block.get("type")
+            if btype in ("tool_result", "tool_use", "image", "document", "thinking"):
+                continue
+            text = block.get("text") or ""
+            if text:
+                parts.append(text)
         return "\n".join(parts)
     return ""
 
@@ -113,12 +214,29 @@ def parse_transcript(path: str | None) -> list[dict]:
     return events
 
 
+def _is_human_user_turn(ev: dict) -> bool:
+    """是否为真人对话轮次（排除 tool_result / 斜杠命令 / 本地命令回显 / task 通知）。"""
+    if ev.get("type") != "user":
+        return False
+    text = _extract_text(ev)
+    if not text or not str(text).strip():
+        return False
+    s = str(text).lstrip()
+    if s.startswith("<command-name>") or s.startswith("<command-message>"):
+        return False
+    if s.startswith("<local-command-") or s.startswith("<local-command"):
+        return False
+    if s.startswith("<task-notification"):
+        return False
+    return True
+
+
 def content_events(events: list[dict]) -> list[dict]:
     return [ev for ev in events if ev.get("type") in ("user", "assistant") and _extract_text(ev)]
 
 
 def count_turns(events: list[dict]) -> int:
-    return sum(1 for ev in events if ev.get("type") == "user" and _extract_text(ev))
+    return sum(1 for ev in events if _is_human_user_turn(ev))
 
 
 def recent_turn_sizes(events: list[dict], n: int = 5) -> list[int]:
@@ -133,8 +251,8 @@ def recent_turn_sizes(events: list[dict], n: int = 5) -> list[int]:
         ev_type = ev.get("type", "")
         if ev_type not in ("user", "assistant"):
             continue
-        # turn 边界: 只有带文本的真实 user 消息才是新 turn 起点
-        if ev_type == "user" and _extract_text(ev) and cur > 0:
+        # turn 边界: 真人文本 user（排除 tool_result / 斜杠命令回显）
+        if ev_type == "user" and _is_human_user_turn(ev) and cur > 0:
             sizes.append(cur)
             cur = 0
         # 用 _extract_all_text 估算所有消息（含 tool_use/tool_result）的大小
@@ -166,12 +284,14 @@ def _empty_metrics() -> dict:
 
 
 def _merge_metrics(dest: dict, src: dict) -> None:
-    """将 *src* metrics 合并到 *dest*（原地修改）。"""
-    for k in ("input", "output", "cache_read", "cache_write",
-              "turn_count", "compaction_count"):
+    """将 *src* metrics 合并到 *dest*（原地修改）。
+
+    合并 token 与 compaction；不合并 turn_count / context_len——
+    子代理内部轮次不是主会话对话轮次，子代理上下文窗口也独立。
+    """
+    for k in ("input", "output", "cache_read", "cache_write", "compaction_count"):
         if k in src:
             dest[k] = dest.get(k, 0) + src[k]
-    # context_len 保持主 transcript 的值，子代理上下文独立
     for model_id, usage in src.get("model_usage", {}).items():
         if model_id not in dest["model_usage"]:
             dest["model_usage"][model_id] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
@@ -217,13 +337,8 @@ def get_session_metrics(transcript_path: str) -> dict:
     key = str(p)
     global _metrics_cache
 
-    # 快速路径：仅用主文件 mtime 即可缓存命中（覆盖无子代理的常见情况，
-    # 避免每次轮询都 glob+stat 子代理目录）
-    if key in _metrics_cache and _metrics_cache[key][0] == mtime:
-        return _metrics_cache[key][1]
-
-    # 缓存未命中：计算 effective_mtime（主 transcript + 子代理中最新的 mtime），
-    # 确保子代理存在时使用与存储一致的 mtime。
+    # 缓存键必须纳入子代理 mtime：仅用主文件 mtime 会在子代理单独更新时
+    # 命中陈旧缓存，漏加 subagent token。
     sub_dir = p.parent / p.stem / "subagents"
     effective_mtime = mtime
     if sub_dir.exists():
@@ -233,7 +348,6 @@ def get_session_metrics(transcript_path: str) -> dict:
             except OSError:
                 pass
 
-    # 二次检查：effective_mtime 可能匹配（当只有主文件变化但子代理未变时）
     if key in _metrics_cache and _metrics_cache[key][0] == effective_mtime:
         return _metrics_cache[key][1]
 
@@ -273,24 +387,14 @@ def get_session_metrics(transcript_path: str) -> dict:
             seen_msg_ids[msg_id] = len(deduped)
         deduped.append(e)
 
-    # 找到最后一个真实 user 消息的时间戳,作为当前 turn 起点。
-    # _extract_text 会过滤掉 tool_result(其 content 块是 tool_result 而非 text)。
-    last_user_ts = ""
-    for e in events:
-        if e.get("type") == "user" and _extract_text(e):
-            ts = e.get("timestamp", "")
-            if ts and ts > last_user_ts:
-                last_user_ts = ts
-
     # 聚合统计
     input_tokens = 0
     output_tokens = 0
     cache_read = 0
     cache_write = 0
     model_usage: dict[str, dict] = {}
-    most_recent_main = None
-    most_recent_ts = ""
-    max_context_in_turn = 0
+    # (timestamp, usage)；随后按 timestamp 排序，避免文件顺序/去重替换位与时间分叉
+    main_calls: list[tuple[str, dict]] = []
 
     for e in deduped:
         usage = e.get("message", {}).get("usage", {})
@@ -314,29 +418,20 @@ def get_session_metrics(transcript_path: str) -> dict:
         model_usage[model]["cache_write"] += cw
 
         ts = e.get("timestamp", "")
-        is_main = ts and not e.get("isSidechain") and not e.get("isApiErrorMessage")
+        is_main = not e.get("isSidechain") and not e.get("isApiErrorMessage")
         if is_main:
-            if ts > most_recent_ts:
-                most_recent_ts = ts
-                most_recent_main = e
-            # 当前 turn(晚于最后一个 user 消息)内的 main 调用取最大 context,
-            # 防止单次 API 调用因 cache 命中比例波动把 CTX 百分比拉回。
-            if last_user_ts and ts > last_user_ts:
-                cl = _context_total(usage)
-                if cl > max_context_in_turn:
-                    max_context_in_turn = cl
+            # 无 timestamp 时用空串；排序后仍保留，只是排在最前
+            main_calls.append((ts or "", usage))
 
-    # 优先使用当前 turn 的最大值;turn 内尚无新调用(用户刚发完消息,
-    # 模型还没响应)时回落最近一次 main 调用
-    if max_context_in_turn > 0:
-        context_len = max_context_in_turn
-    elif most_recent_main:
-        u = most_recent_main.get("message", {}).get("usage", {})
-        context_len = _context_total(u)
-    else:
-        context_len = 0
+    main_calls.sort(key=lambda item: item[0])
+    main_usages = [u for _, u in main_calls]
+    # context_len：最近一次非短暂尖峰的 main 调用上下文。
+    # 不用 turn 内 max——agentic 工具环很长，真人消息可能在数十分钟前，
+    # max 会把一次 cache 重建尖峰锁到整段循环结束。
+    context_len = _pick_stable_context_len(main_usages)
 
-    turn_count = sum(1 for e in events if e.get("type") == "user")
+    # 对话轮次 = 带真实文本的 user 消息；不含 tool_result 事件
+    turn_count = count_turns(events)
     compaction_count = sum(1 for e in events
                            if e.get("type") == "system" and e.get("subtype") == "compact_boundary")
 
@@ -377,27 +472,33 @@ def _deduped_usage_events(events: list[dict]) -> list[dict]:
     return deduped
 
 
+def _main_usages_from_events(events: list[dict]) -> list[dict]:
+    """去重后的 main（非 sidechain / 非 API error）usage，按 timestamp 排序。"""
+    mains: list[tuple[str, dict]] = []
+    for e in _deduped_usage_events(events):
+        if e.get("isSidechain") or e.get("isApiErrorMessage"):
+            continue
+        u = e.get("message", {}).get("usage", {})
+        if not isinstance(u, dict):
+            continue
+        mains.append((e.get("timestamp") or "", u))
+    mains.sort(key=lambda item: item[0])
+    return [u for _, u in mains]
+
+
 def _context_growth_deltas(events: list[dict]) -> list[int]:
     """计算连续 API 调用间总上下文 token 的增量。
 
-    每次 API 调用的总上下文 = input_tokens + cache_read_input_tokens +
-    cache_creation_input_tokens（三者互斥求和，匹配 Anthropic API usage 语义）。
-    返回相邻调用间的正增量列表，取最近 10 个值。
+    使用与 context_len 相同的尖峰过滤，避免 230k→567k 一次性抬升进入平均增长。
+    另过滤 >50% 的跳变（压缩恢复 / 计量字段切换），取最近 10 个正增量。
     """
-    deduped = _deduped_usage_events(events)
-    total_lens = []
-    for e in deduped:
-        u = e.get("message", {}).get("usage", {})
-        total_lens.append(_context_total(u))
+    total_lens = _stable_context_totals(_main_usages_from_events(events))
 
     deltas = []
     for i in range(1, len(total_lens)):
         d = total_lens[i] - total_lens[i - 1]
         if d <= 0:
             continue
-        # 过滤压缩或 tool_use→full_context 过渡产生的虚假大增量：
-        # 如果增量 > 前次调用的 50%，说明上一次是 tool_use（仅 2-5K）
-        # 或刚刚 compression 结束——这些恢复不是真正的上下文增长。
         prev = max(total_lens[i - 1], 1)
         if d * 2 > prev:
             continue

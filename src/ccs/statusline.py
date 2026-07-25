@@ -131,26 +131,46 @@ def main() -> None:
         metrics = {}
         compaction_count = 0
 
-    # CTX: 优先使用 transcript 解析的 context_len，fallback 到 snapshot
-    tx_context_len = metrics.get("context_len", 0)
-    if tx_context_len > 0:
-        ctx_pct = tx_context_len / ctx_size * 100
+    # CTX: transcript 稳态 context_len 为主；与 stdin snapshot 交叉校验，
+    # 避免 transcript 尖峰/解析异常时独自报飞。
+    tx_context_len = int(metrics.get("context_len", 0) or 0)
+    snapshot_ctx_len = 0
+    if snapshot_pct is not None and ctx_size > 0:
+        try:
+            snapshot_ctx_len = int(float(snapshot_pct) / 100.0 * ctx_size)
+        except (TypeError, ValueError):
+            snapshot_ctx_len = 0
+    if snapshot_ctx_len <= 0 and per_call_total_input > 0:
+        snapshot_ctx_len = per_call_total_input
+
+    context_len = tx_context_len
+    if tx_context_len > 0 and snapshot_ctx_len > 0:
+        lo = min(tx_context_len, snapshot_ctx_len)
+        hi = max(tx_context_len, snapshot_ctx_len)
+        # 两者偏离过大时取更小值：尖峰高报比偶发低估更常见、更误导
+        if lo > 0 and hi > int(lo * 1.35) and (hi - lo) > 20_000:
+            context_len = lo
+    elif tx_context_len <= 0:
+        context_len = snapshot_ctx_len
+
+    if context_len > 0 and ctx_size > 0:
+        ctx_pct = context_len / ctx_size * 100
     else:
         ctx_pct = snapshot_pct
 
-    # Replay estimation: 用 transcript context_len 替代 snapshot total_input_tokens
+    # Replay estimation: 用交叉校验后的 context_len
     try:
         replay_info = tx_mod.estimate_next_replay(
             transcript_path,
             latest_call_input=per_call_total_input,
             total_input_tokens=cur_snapshot_input,
             ctx_window_size=ctx_size,
-            current_context_len=tx_context_len,
+            current_context_len=context_len,
         )
         replay_tokens = replay_info.get("estimated_tokens", 0)
         transcript_turns = replay_info.get("turn_count", 0)
     except Exception:
-        replay_tokens = per_call_total_input or tx_context_len or 0
+        replay_tokens = per_call_total_input or context_len or 0
         transcript_turns = 0
 
     session = {}
@@ -159,8 +179,10 @@ def main() -> None:
     except Exception:
         pass
 
-    db_turns = session.get("turn_count") or 0
-    turn_count = db_turns if db_turns > 0 else transcript_turns
+    # turn_count 现为文本 user 轮次；优先 transcript，DB 仅作回退
+    metrics_turns = int(metrics.get("turn_count", 0) or 0)
+    db_turns = int(session.get("turn_count") or 0)
+    turn_count = metrics_turns or transcript_turns or db_turns
 
     # Aggregate ALL sessions (main + subagents) for token/cost totals
     agg = db.get_all_totals(session_id)
