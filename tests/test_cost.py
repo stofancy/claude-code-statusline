@@ -329,6 +329,56 @@ def test_opencode_prefix_stripped():
     )
 
 
+def test_weihub_glm_5_2_exact_proxy_id_pricing():
+    """weihub/glm-5.2 应命中完整代理 ID 条目，避免落入默认定价。"""
+    price, price_currency, target = _resolve("weihub/glm-5.2")
+    assert price_currency == "CNY"
+    assert target == "CNY"
+    assert price.get("input_per_1m") == 8.00, (
+        f"weihub/glm-5.2 input 应为 ¥8，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("input_cache_hit_per_1m") == 1.60, (
+        f"weihub/glm-5.2 cache hit 应为 ¥1.6，实际为 {price.get('input_cache_hit_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 28.00, (
+        f"weihub/glm-5.2 output 应为 ¥28，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_weihub_kimi_k2_7_code_exact_proxy_id_pricing():
+    """weihub/kimi-k2.7-code 应使用 WeiHub/Kimi 代理专属价表。"""
+    price, price_currency, target = _resolve("weihub/kimi-k2.7-code")
+    assert price_currency == "CNY"
+    assert target == "CNY"
+    assert price.get("input_per_1m") == 6.50, (
+        f"weihub/kimi-k2.7-code input 应为 ¥6.5，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("input_cache_hit_per_1m") == 1.30, (
+        f"weihub/kimi-k2.7-code cache hit 应为 ¥1.3，实际为 {price.get('input_cache_hit_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 27.00, (
+        f"weihub/kimi-k2.7-code output 应为 ¥27，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_fmt_cost_multi_weihub_glm_5_2_symbol_and_magnitude():
+    """weihub/glm-5.2 cost 应按 CNY 直接计算并显示 ¥。"""
+    breakdown = {
+        "weihub/glm-5.2": {
+            "input": 1_000_000,
+            "output": 100_000,
+            "cache_read": 100_000,
+            "cache_write": 0,
+        }
+    }
+    result = cost_mod.fmt_cost_multi(breakdown)
+    assert result.startswith("¥"), f"WeiHub GLM 成本应显示 ¥，实际为 {result!r}"
+    value = float(result.lstrip("¥"))
+    assert 10.5 < value < 11.5, (
+        f"WeiHub GLM 成本预期约 ¥10.96，实际为 {result!r}"
+    )
+
+
 def test_openrouter_with_1m_suffix_resolves_correctly():
     """[1m] 后缀与代理前缀组合：openrouter/anthropic/claude-opus-4-8[1m] 应仍命中 $5/$25。
 
@@ -382,3 +432,100 @@ def test_openrouter_does_not_shadow_explicit_pricing():
         )
     finally:
         cm._load_pricing = original_load
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 任务 (f)：gpt-5.6-sol 解析（点号形式 / 连字符键 / [1m] 后缀 / 代理前缀）
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_gpt_5_6_sol_dot_form_resolves_to_short_context_pricing():
+    """gpt-5.6-sol（官方点号形式）应归一化为 gpt-5-6-sol 并命中短上下文档定价。
+
+    解析链：gpt-5.6-sol
+      → 点号归一：gpt-5-6-sol（命中）→ input=$5, cached=$0.5, cache_write=$6.25, output=$30
+    修复前候选只按 '-' 分段，点号形式退化到 gpt → 落入默认价（低估）。
+    """
+    price, price_currency, _ = _resolve("gpt-5.6-sol")
+    assert price_currency == "USD", f"预期价格货币为 USD，实际为 {price_currency!r}"
+    assert price.get("input_per_1m") == 5.00, (
+        f"gpt-5.6-sol input 应为 $5.00，实际为 {price.get('input_per_1m')}（落入默认价 = bug）"
+    )
+    assert price.get("cache_read_per_1m") == 0.50, (
+        f"gpt-5.6-sol cached input 应为 $0.50，实际为 {price.get('cache_read_per_1m')}"
+    )
+    assert price.get("cache_write_per_1m") == 6.25, (
+        f"gpt-5.6-sol cache write 应为 $6.25，实际为 {price.get('cache_write_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 30.00, (
+        f"gpt-5.6-sol output 应为 $30.00，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_gpt_5_6_sol_dash_form_exact_match():
+    """gpt-5-6-sol（连字符形式，即价表键本身）应精确命中。"""
+    price, _, _ = _resolve("gpt-5-6-sol")
+    assert price.get("input_per_1m") == 5.00
+    assert price.get("output_per_1m") == 30.00
+
+
+def test_gpt_5_6_sol_1m_suffix_stripped():
+    """gpt-5.6-sol[1m]（1M 上下文 / 缓存变体标识）应剥离后缀并命中短上下文档定价。"""
+    price, _, _ = _resolve("gpt-5.6-sol[1m]")
+    assert price.get("input_per_1m") == 5.00, (
+        f"gpt-5.6-sol[1m] input 应为 $5.00，实际为 {price.get('input_per_1m')}"
+    )
+    assert price.get("output_per_1m") == 30.00, (
+        f"gpt-5.6-sol[1m] output 应为 $30.00，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_gpt_5_6_sol_proxy_prefix_stripped():
+    """代理前缀 openrouter/gpt-5.6-sol 应剥离前缀 + 点号归一后命中定价。"""
+    price, _, _ = _resolve("openrouter/gpt-5.6-sol")
+    assert price.get("input_per_1m") == 5.00, (
+        f"openrouter/gpt-5.6-sol input 应为 $5.00，实际为 {price.get('input_per_1m')}（可能走了默认价）"
+    )
+    assert price.get("output_per_1m") == 30.00, (
+        f"openrouter/gpt-5.6-sol output 应为 $30.00，实际为 {price.get('output_per_1m')}"
+    )
+
+
+def test_gpt_5_6_sol_does_not_fallback_to_gpt_5():
+    """回归保护：gpt-5.6-sol 不应退化匹配到 gpt-5（$0.625/$5）。
+
+    候选逐段剥离链含 gpt-5-6-sol → gpt-5-6 → gpt-5 → gpt。gpt-5-6-sol
+    必须先命中，否则会退化到 gpt-5 的 $0.625/$5（大幅低估）。
+    """
+    for model_id in ("gpt-5.6-sol", "gpt-5-6-sol", "gpt-5.6-sol[1m]"):
+        price, _, _ = _resolve(model_id)
+        assert price.get("input_per_1m") == 5.00, (
+            f"{model_id!r} 退化匹配到了 gpt-5 的 $0.625 定价，应为 $5.00（bug 回归）"
+        )
+        assert price.get("output_per_1m") == 30.00, (
+            f"{model_id!r} 退化匹配到了 gpt-5 的 $5 output，应为 $30.00（bug 回归）"
+        )
+
+
+def test_fmt_cost_multi_gpt_5_6_sol_symbol_and_magnitude():
+    """fmt_cost_multi 对 gpt-5.6-sol usage 计算：无 currency 字段 → 显示 ¥（display_currency=CNY）。
+
+    用量：input=1_000_000（$5.00）+ output=100_000（$3.00）= USD $8.00
+    → CNY ¥57.44（8.00 × 7.18）。
+    """
+    breakdown = {
+        "gpt-5.6-sol": {
+            "input": 1_000_000,
+            "output": 100_000,
+            "cache_read": 0,
+            "cache_write": 0,
+        }
+    }
+    result = cost_mod.fmt_cost_multi(breakdown)
+    assert result.startswith("¥"), (
+        f"gpt-5.6-sol 无 currency 字段应按 display_currency=CNY 显示 ¥，实际为 {result!r}"
+    )
+    value = float(result.lstrip("¥"))
+    # 正确定价 ≈ ¥57.44；若退化到 gpt-5（$0.625/$5）则约 ¥8.1。
+    assert 55.0 < value < 60.0, (
+        f"gpt-5.6-sol 成本预期约 ¥57.44，实际为 {result!r}"
+    )

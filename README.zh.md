@@ -128,6 +128,61 @@ pip install git+https://github.com/stofancy/claude-code-statusline.git
 
 然后将 hook + statusline 配置合并到 `~/.claude/settings.json`（参见 `examples/settings.json`）。重启 Claude Code。
 
+## Codex 支持
+
+Codex 支持内置 footer status line，可通过 `/statusline` 或
+`~/.codex/config.toml` 中的 `status_line = [...]` 配置；但它目前不暴露
+Claude Code 那种 `statusLine.command` 自定义命令协议。因此第三方命令不能在
+每次 TUI tick 时直接替换 Codex 底部状态栏。
+
+本项目为 Codex 提供的是 **伪 statusline**：作为 Codex `Stop` hook 运行，
+在每次回答结束后追加两行 ANSI 状态快照，渲染风格复用 Claude Code 版本。
+数据来自 Codex 本地 `~/.codex/sessions` 下的 rollout JSONL，优先使用权威的
+`event_msg` / `token_count` 记录，包括 `total_token_usage`、
+`last_token_usage`、`model_context_window` 和 `rate_limits`。
+
+安装 Codex hook helper：
+
+```bash
+bash install-codex.sh
+```
+
+Windows PowerShell 7+：
+
+```powershell
+pwsh -File install-codex.ps1
+```
+
+安装脚本会在 `~/.codex/statusline/venv` 创建虚拟环境（如果设置了
+`CODEX_HOME`，则使用 `$CODEX_HOME/statusline/venv`），以 editable 模式安装本包，
+验证 Codex 相关模块，并自动把 `Stop` hook 写入 `~/.codex/config.toml`。
+重复运行安装脚本是幂等的，不会追加重复 hook。
+
+安装后可手动测试：
+
+```bash
+codex-statusline --plain
+```
+
+安装脚本写入的配置等价于：
+
+```toml
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'codex-statusline'
+timeout = 10
+```
+
+实际生成的命令会使用 Codex statusline venv 里的完整 Python 路径，例如：
+
+```toml
+command = '"/path/to/python" -m ccs.codex_statusline'
+```
+
+安装后重启 Codex；如果 Codex 提示需要信任新 hook，在 TUI 里用 `/hooks` 审核并信任。
+
 ## 环境要求
 
 - Python 3.11+

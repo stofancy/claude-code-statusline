@@ -5,3 +5,10 @@ __pycache__/
 dist/
 build/
 .claude/
+.pytest_cache/
+.playwright-mcp/
+*.log
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

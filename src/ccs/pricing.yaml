@@ -221,6 +221,19 @@ providers:
       input_per_1m: 30.00
       output_per_1m: 180.00
 
+    # gpt-5.6 系列（sol/terra/luna）分档计价：短上下文（Standard）与长上下文。
+    # 与本段其它 gpt-5.x 条目一致，此处记录短上下文档（Standard）。
+    # gpt-5.6-sol 长上下文档为 input $10 / cached $1 / cache_write $12.50 /
+    # output $45——若你的会话长期超过分档阈值，改用长上下文档数值。
+    # 键用连字符形式 gpt-5-6-sol，配合 cost._resolve_price 的点号归一
+    # （gpt-5.6-sol → gpt-5-6-sol）、代理前缀剥离与 [1m] 后缀剥离，
+    # 覆盖 proxy/gpt-5.6-sol、gpt-5.6-sol[1m] 等非官方变体。
+    gpt-5-6-sol:
+      input_per_1m: 5.00
+      cache_read_per_1m: 0.50
+      cache_write_per_1m: 6.25
+      output_per_1m: 30.00
+
     gpt-4o:
       input_per_1m: 2.50
       cache_read_per_1m: 1.25
@@ -577,3 +590,52 @@ providers:
           input_per_1m: 0.0
           input_cache_hit_per_1m: 0.0
           output_per_1m: 0.0
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # WeiHub — proxy models routed through the WeiHub gateway. Model IDs carry
+  # a ``weihub/`` prefix in the transcript (e.g. ``weihub/glm-5.2``). Prices
+  # are aligned with Alibaba Cloud Bailian (百炼) for the same upstream models.
+  # Source: https://help.aliyun.com/zh/model-studio/billing (verified 2026-07-02)
+  #
+  # Keys use the full prefixed ID (``weihub/glm-5.2``) rather than the bare
+  # model name. Background: ``_resolve_price`` strips ``/``-delimited proxy
+  # prefixes, but only on the dot-normalized form — ``weihub/glm-5.2`` is
+  # first dot-normalised to ``weihub/glm-5-2``, then prefix-stripped to
+  # ``glm-5-2`` (dashes). That dash-form candidate never matches the dot-form
+  # key ``glm-5.2`` under ``zhipu``, so the model would fall through to
+  # ``_DEFAULT_PRICING`` (≈10× under-count). Using the full prefixed ID as
+  # the key matches on the first candidate (exact original) before any
+  # normalisation is applied.
+  #
+  # GLM-5.2: Bailian flat pricing (不区分阶梯, 非思考和思考模式),
+  # input ¥8 / output ¥28 per 1M tokens. Implicit context-cache hit is 20%
+  # of input (¥1.60), per Bailian's context-cache discount table.
+  #
+  # Kimi-K2.7-Code: Bailian input ¥6.5 / output ¥27 per 1M tokens (仅思考模式).
+  # The model supports context cache (上下文缓存 享有折扣); implicit cache hit
+  # uses Bailian's 20% discount rate (¥1.30 = 6.5 × 0.20).
+  # ─────────────────────────────────────────────────────────────────────────
+  weihub:
+    weihub/glm-5.2:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 8.00
+          input_cache_hit_per_1m: 1.60
+          output_per_1m: 28.00
+        USD:
+          input_per_1m: 1.1142
+          input_cache_hit_per_1m: 0.2228
+          output_per_1m: 3.8997
+
+    weihub/kimi-k2.7-code:
+      currency: CNY
+      prices:
+        CNY:
+          input_per_1m: 6.50
+          input_cache_hit_per_1m: 1.30
+          output_per_1m: 27.00
+        USD:
+          input_per_1m: 0.9053
+          input_cache_hit_per_1m: 0.1811
+          output_per_1m: 3.7587

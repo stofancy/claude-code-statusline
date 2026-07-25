@@ -138,6 +138,66 @@ pip install git+https://github.com/stofancy/claude-code-statusline.git
 
 Then merge the hook + statusline configuration into `~/.claude/settings.json` (see `examples/settings.json`). Restart Claude Code.
 
+## Codex support
+
+Codex supports a built-in footer status line, configured with `/statusline` or
+`status_line = [...]` in `~/.codex/config.toml`, but it does not currently expose
+Claude Code's custom `statusLine.command` protocol. That means a third-party
+command cannot replace the live Codex footer on every TUI tick.
+
+For Codex, this project provides a **faux statusline** command intended for a
+Codex `Stop` hook. After each assistant turn, Codex runs the hook and appends a
+two-line ANSI status snapshot using the same renderer style as the Claude Code
+statusline. The data source is Codex's local rollout JSONL under
+`~/.codex/sessions`, especially the authoritative `event_msg` / `token_count`
+records (`total_token_usage`, `last_token_usage`, `model_context_window`, and
+`rate_limits`).
+
+Install the Codex hook helper:
+
+```bash
+bash install-codex.sh
+```
+
+On Windows PowerShell 7+:
+
+```powershell
+pwsh -File install-codex.ps1
+```
+
+The installer creates a venv at `~/.codex/statusline/venv` (or
+`$CODEX_HOME/statusline/venv` when `CODEX_HOME` is set), installs this package
+in editable mode, verifies the Codex modules, and adds the `Stop` hook to
+`~/.codex/config.toml`. Re-running the installer is idempotent; it will not
+append a duplicate hook.
+
+Manual test after installation:
+
+```bash
+codex-statusline --plain
+```
+
+The installer writes a hook equivalent to this:
+
+```toml
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'codex-statusline'
+timeout = 10
+```
+
+The generated command uses the full Python path from the Codex statusline venv,
+for example:
+
+```toml
+command = '"/path/to/python" -m ccs.codex_statusline'
+```
+
+Restart Codex after installation, then review and trust the new hook with
+`/hooks` if Codex asks.
+
 ### Environment variables
 
 | Variable | Effect |

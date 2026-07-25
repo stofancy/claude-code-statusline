@@ -15,6 +15,7 @@ Issues = "https://github.com/stofancy/claude-code-statusline/issues"
 [project.scripts]
 ccs-statusline = "ccs.statusline:main"
 ccs-tracker = "ccs.tracker:main"
+codex-statusline = "ccs.codex_statusline:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
