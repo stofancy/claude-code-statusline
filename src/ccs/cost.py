@@ -55,6 +55,7 @@ Why split display from price currency?
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -200,10 +201,49 @@ def _find_model_entry(model_id: str, pricing: dict) -> dict | None:
     return None
 
 
+def _utc_hour(at_ts: str | None) -> int:
+    """Extract the UTC hour from a transcript ISO timestamp (or now).
+
+    Transcript timestamps look like ``2026-08-15T17:48:42.980Z``. Unknown
+    formats fall back to the current UTC hour so tide pricing never throws.
+    """
+    if not at_ts:
+        return datetime.now(timezone.utc).hour
+    try:
+        dt = datetime.fromisoformat(str(at_ts).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc).hour
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).hour
+
+
+def _select_tide_block(price: dict, tide: dict, at_ts: str | None) -> dict:
+    """Pick the ``peak`` / ``off_peak`` sub-block for a tide container.
+
+    ``tide.peak_hours_utc`` is a list of half-open UTC hour intervals
+    ``[start, end)`` (DeepSeek: ``[[1,4],[6,10]]``). Hours inside any
+    interval are peak; everything else is off-peak. A flat price block
+    (no ``peak``/``off_peak`` keys) passes through unchanged.
+    """
+    if not isinstance(price, dict):
+        return price
+    peak = price.get("peak")
+    off_peak = price.get("off_peak")
+    if not (isinstance(peak, dict) and isinstance(off_peak, dict)):
+        return price
+    hour = _utc_hour(at_ts)
+    for start, end in (tide.get("peak_hours_utc") or []):
+        if start <= hour < end:
+            return peak
+    return off_peak
+
+
 def _resolve_price(
     model_id: str,
     display_currency: str,
     base_currency: str,
+    at_ts: str | None = None,
 ) -> tuple[dict, str, str]:
     """Return ``(price_dict, price_currency, target_display_currency)``.
 
@@ -275,6 +315,15 @@ def _resolve_price(
         parts.pop()
         candidates.append("-".join(parts))
 
+    # Dot 形式（如 grok-4.5）在 dot→dash 归一化后会变成 grok-4-5，剥离链
+    # 永远无法命中点号键（grok 官方键就是点号形式）。对原始形式同样做渐进
+    # 剥离，使 "grok-4.5-build" → "grok-4.5" 能精确命中。
+    if stripped != normalized:
+        parts = stripped.split("-")
+        while len(parts) > 1:
+            parts.pop()
+            candidates.append("-".join(parts))
+
     for cand in candidates:
         e = _find_model_entry(cand, pricing)
         if e is not None:
@@ -290,6 +339,9 @@ def _resolve_price(
     price, price_currency = _select_price_block(
         entry, model_currency, display_currency, base_currency
     )
+    tide = entry.get("tide")
+    if isinstance(tide, dict):
+        price = _select_tide_block(price, tide, at_ts)
     target = model_currency if has_explicit_currency else display_currency
     return price, price_currency, target
 
@@ -319,6 +371,11 @@ def _select_price_block(
       • Use as-is. Returned price currency is the ``model_currency``
         argument (i.e. ``entry['currency']`` if declared, else
         ``base_currency``).
+
+    A currency block may be a *tide container* — ``{peak: {...},
+    off_peak: {...}}`` — for peak/off-peak pricing (DeepSeek 峰谷).
+    The container is returned as-is; :func:`_select_tide_block` picks
+    the sub-block by timestamp at resolve time.
     """
     prices_map = entry.get("prices")
     if isinstance(prices_map, dict) and prices_map:
@@ -420,6 +477,7 @@ def _model_cost_in_native(price: dict, usage: dict) -> float:
 def fmt_cost_multi(
     model_breakdown: dict,
     primary_model_id: str | None = None,
+    model_calls: dict | None = None,
 ) -> str:
     """Render the cumulative cost string for a per-model usage breakdown.
 
@@ -444,8 +502,16 @@ def fmt_cost_multi(
 
     When ``primary_model_id`` is omitted, the breakdown is aggregated
     into the user's ``display_currency`` (the legacy behavior).
+
+    **Per-call precision (tide models):** pass ``model_calls`` as
+    ``{model_id: [(iso_ts, usage), ...]}`` to price each API call with
+    its own timestamp. For peak/off-peak (潮汐) models this is the only
+    accurate path — an aggregate breakdown has no time information, so
+    a mixed peak/off-peak session would otherwise be priced entirely at
+    the current hour. When ``model_calls`` is given it takes precedence
+    over ``model_breakdown`` for the models it covers.
     """
-    if not model_breakdown:
+    if not model_breakdown and not model_calls:
         return "-"
 
     base, display, fx_rates = _currency_settings()
@@ -454,12 +520,21 @@ def fmt_cost_multi(
     # the model's target display currency. Group by target so we can tell
     # whether aggregation can be done in one currency or must FX-mix.
     by_target: dict[str, float] = {}
-    for model_id, usage in model_breakdown.items():
-        price, price_currency, target = _resolve_price(model_id, display, base)
+
+    def _acc_cost(model_id: str, usage: dict, at_ts: str | None) -> None:
+        price, price_currency, target = _resolve_price(model_id, display, base, at_ts=at_ts)
         cost = _model_cost_in_native(price, usage)
         if price_currency != target:
             cost = _fx_convert(cost, price_currency, target, fx_rates)
         by_target[target] = by_target.get(target, 0.0) + cost
+
+    if model_calls:
+        for model_id, calls in model_calls.items():
+            for ts, usage in calls:
+                _acc_cost(model_id, usage, ts)
+    else:
+        for model_id, usage in model_breakdown.items():
+            _acc_cost(model_id, usage, None)
 
     if not by_target:
         return "-"

@@ -222,6 +222,7 @@ def session_metrics(path: str | Path | None) -> dict[str, Any]:
 
     totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     model_usage: dict[str, dict[str, int]] = {}
+    model_calls: dict[str, list] = {}
     context_len = 0
     last_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "context_len": 0}
     context_lens: list[int] = []
@@ -233,6 +234,9 @@ def session_metrics(path: str | Path | None) -> dict[str, Any]:
             model_usage[mid] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         for key in model_usage[mid]:
             model_usage[mid][key] += usage[key]
+        ts = _event.get("timestamp", "") if isinstance(_event, dict) else ""
+        # 逐调用明细：(ts, usage)——供潮汐定价按每次调用时间精确计价
+        model_calls.setdefault(mid, []).append((ts or "", dict(usage)))
         context_len = max(context_len, usage["context_len"])
         context_lens.append(usage["context_len"])
         last_usage = usage
@@ -244,6 +248,7 @@ def session_metrics(path: str | Path | None) -> dict[str, Any]:
         context_len = (token_last or token_total)["context_len"]
         last_usage = token_last or token_total
         model_usage = {model: dict(totals)} if model else {}
+        model_calls = {}
         context_lens = token_context_lens
 
     positive_deltas = [b - a for a, b in zip(context_lens, context_lens[1:]) if b > a]
@@ -270,5 +275,6 @@ def session_metrics(path: str | Path | None) -> dict[str, Any]:
         "replay_tokens": replay_tokens,
         "last_usage": last_usage,
         "model_usage": model_usage,
+        "model_calls": model_calls,
         "official_usage": official_usage,
     }

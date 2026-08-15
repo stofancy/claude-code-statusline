@@ -53,7 +53,11 @@ def main(argv: list[str] | None = None) -> None:
     last = metrics.get("last_usage") or {}
 
     try:
-        cost_str = cost_mod.fmt_cost_multi(metrics.get("model_usage") or {}, primary_model_id=model_id)
+        cost_str = cost_mod.fmt_cost_multi(
+            metrics.get("model_usage") or {},
+            primary_model_id=model_id,
+            model_calls=metrics.get("model_calls"),
+        )
     except Exception:
         cost_str = "-"
 

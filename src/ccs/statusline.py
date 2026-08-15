@@ -122,7 +122,13 @@ def main() -> None:
             else:
                 for k in ("input", "output", "cache_read", "cache_write"):
                     mapped_mu[actual][k] = mapped_mu[actual].get(k, 0) + usage.get(k, 0)
-        metrics = {**raw_metrics, "model_usage": mapped_mu}
+        # 逐调用明细同样映射模型名——供潮汐定价按每次调用时间精确计价
+        raw_calls = raw_metrics.get("model_calls", {})
+        mapped_calls: dict[str, list] = {}
+        for mid, calls in raw_calls.items():
+            actual = _resolve_actual_model_id(mid)
+            mapped_calls.setdefault(actual, []).extend(calls)
+        metrics = {**raw_metrics, "model_usage": mapped_mu, "model_calls": mapped_calls}
         db.update_session_tokens(session_id, metrics)
         if mapped_mu:  # 仅当有数据时才写入——防止 transcript_path 为空时清空已有数据
             db.update_model_usage(session_id, mapped_mu)
@@ -195,9 +201,12 @@ def main() -> None:
     subagent_running = agg["subagent_running"]
 
     try:
+        # TOTAL：优先用带时间戳的逐调用明细精算（潮汐定价按调用时刻选峰谷价）；
+        # 无明细时回退 DB 按模型聚合（以当前时刻计价）。
         cost_str = cost_mod.fmt_cost_multi(
             db.get_model_breakdown(session_id),
             primary_model_id=actual_model_id or None,
+            model_calls=metrics.get("model_calls"),
         )
     except Exception:
         cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0

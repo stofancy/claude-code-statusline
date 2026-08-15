@@ -31,6 +31,20 @@ def _resolve(model_id: str) -> tuple[dict, str, str]:
 # 任务 (a)：claude-opus-4-8 与 claude-opus-4-8[1m] 均解析到 $5/$25 定价块
 # ──────────────────────────────────────────────────────────────────────────────
 
+def test_opus_5_exact_match_pricing():
+    """claude-opus-5（2026-07-24 发布，与 opus-4-8 同价）应解析到 $5/$25 定价块。
+
+    回归保护：缺此条目时会逐段剥离到 claude-opus → claude 均不命中，
+    落入默认定价（$1/$4/$0.1 且无 cache_write），导致成本低估约 5.5×。
+    """
+    price, price_currency, _ = _resolve("claude-opus-5")
+    assert price_currency == "USD"
+    assert price.get("input_per_1m") == 5.00
+    assert price.get("output_per_1m") == 25.00
+    assert price.get("cache_read_per_1m") == 0.50
+    assert price.get("cache_write_per_1m") == 6.25
+
+
 def test_opus_4_8_exact_match_pricing():
     """claude-opus-4-8 精确匹配应返回 input=$5、output=$25 的定价块。"""
     price, price_currency, _ = _resolve("claude-opus-4-8")
@@ -286,35 +300,39 @@ def test_openrouter_anthropic_claude_resolves_to_opus_4_8_pricing():
 
 
 def test_openrouter_deepseek_with_provider_segment_resolves():
-    """openrouter/deepseek/deepseek-v4-pro 嵌入 provider 段也应命中 deepseek 定价。"""
+    """openrouter/deepseek/deepseek-v4-pro 嵌入 provider 段也应命中 deepseek 潮汐定价。
+
+    deepseek-v4-pro 现为峰谷（潮汐）双价：空闲 ¥4.5/¥13.5，高峰 ¥9/¥27。
+    解析结果取决于当前 UTC 时刻，故断言双价任一值。
+    """
     price, _, _ = _resolve("openrouter/deepseek/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 3.0, (
-        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") in (4.5, 9.0), (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥4.5/¥9（潮汐）input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 6.0, (
-        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") in (13.5, 27.0), (
+        f"openrouter/deepseek/deepseek-v4-pro 应解析为 ¥13.5/¥27（潮汐）output，实际为 {price.get('output_per_1m')}"
     )
 
 
 def test_openrouter_deepseek_no_provider_segment_resolves():
-    """openrouter/deepseek-v4-pro（无 provider 段）也应命中 deepseek 定价。"""
+    """openrouter/deepseek-v4-pro（无 provider 段）也应命中 deepseek 潮汐定价。"""
     price, _, _ = _resolve("openrouter/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 3.0, (
-        f"openrouter/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") in (4.5, 9.0), (
+        f"openrouter/deepseek-v4-pro 应解析为 ¥4.5/¥9（潮汐）input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 6.0, (
-        f"openrouter/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") in (13.5, 27.0), (
+        f"openrouter/deepseek-v4-pro 应解析为 ¥13.5/¥27（潮汐）output，实际为 {price.get('output_per_1m')}"
     )
 
 
 def test_opencode_go_prefix_stripped():
     """opencode-go/<model> 形式（含连字符变体）应被剥离为真实模型。"""
     price, _, _ = _resolve("opencode-go/deepseek-v4-pro")
-    assert price.get("input_per_1m") == 3.0, (
-        f"opencode-go/deepseek-v4-pro 应解析为 ¥3 input，实际为 {price.get('input_per_1m')}"
+    assert price.get("input_per_1m") in (4.5, 9.0), (
+        f"opencode-go/deepseek-v4-pro 应解析为 ¥4.5/¥9（潮汐）input，实际为 {price.get('input_per_1m')}"
     )
-    assert price.get("output_per_1m") == 6.0, (
-        f"opencode-go/deepseek-v4-pro 应解析为 ¥6 output，实际为 {price.get('output_per_1m')}"
+    assert price.get("output_per_1m") in (13.5, 27.0), (
+        f"opencode-go/deepseek-v4-pro 应解析为 ¥13.5/¥27（潮汐）output，实际为 {price.get('output_per_1m')}"
     )
 
 
@@ -529,3 +547,114 @@ def test_fmt_cost_multi_gpt_5_6_sol_symbol_and_magnitude():
     assert 55.0 < value < 60.0, (
         f"gpt-5.6-sol 成本预期约 ¥57.44，实际为 {result!r}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 任务 (f)：DeepSeek 潮汐（峰谷）定价——按调用时间精算
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_tide_peak_hour_picks_peak_block():
+    """UTC 02:00（高峰区间 [1,4)）应选 peak 块：¥9/¥0.30/¥27。"""
+    price, price_currency, target = cost_mod._resolve_price(
+        "deepseek-v4-pro", "USD", "USD", at_ts="2026-08-15T02:00:00.000Z"
+    )
+    assert price_currency == "CNY" and target == "CNY"
+    assert price.get("input_per_1m") == 9.0
+    assert price.get("input_cache_hit_per_1m") == 0.30
+    assert price.get("output_per_1m") == 27.0
+
+
+def test_tide_off_peak_hour_picks_off_peak_block():
+    """UTC 05:30（区间外）应选 off_peak 块：¥4.5/¥0.15/¥13.5。"""
+    price, _, _ = cost_mod._resolve_price(
+        "deepseek-v4-pro", "USD", "USD", at_ts="2026-08-15T05:30:00.000Z"
+    )
+    assert price.get("input_per_1m") == 4.5
+    assert price.get("output_per_1m") == 13.5
+
+
+def test_tide_boundary_10_utc_is_off_peak():
+    """UTC 10:00 为高峰区间 [6,10) 的右边界，应回落空闲价（flash ¥1.5/¥4.5）。"""
+    price, _, _ = cost_mod._resolve_price(
+        "deepseek-v4-flash", "USD", "USD", at_ts="2026-08-15T10:00:00.000Z"
+    )
+    assert price.get("input_per_1m") == 1.5
+    assert price.get("output_per_1m") == 4.5
+
+
+def test_tide_second_peak_interval():
+    """UTC 08:00（第二个高峰区间 [6,10)）也应选 peak 块。"""
+    price, _, _ = cost_mod._resolve_price(
+        "deepseek-v4-pro", "USD", "USD", at_ts="2026-08-15T08:00:00.000Z"
+    )
+    assert price.get("input_per_1m") == 9.0
+
+
+def test_tide_malformed_timestamp_falls_back_to_now():
+    """非法时间戳不应抛异常，回退当前时刻选价（双价任一）。"""
+    price, _, _ = cost_mod._resolve_price(
+        "deepseek-v4-pro", "USD", "USD", at_ts="not-a-timestamp"
+    )
+    assert price.get("input_per_1m") in (4.5, 9.0)
+
+
+def test_fmt_cost_multi_per_call_tide_precision():
+    """按调用时间精算：高峰 1M input（¥9）+ 空闲 1M input（¥4.5）= ¥13.50。
+
+    若退化为聚合（当前时刻单价），1M×2 只会是 ¥9 或 ¥18，无法得到 ¥13.5。
+    """
+    calls = {
+        "deepseek-v4-pro": [
+            ("2026-08-15T02:00:00.000Z", {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}),
+            ("2026-08-15T05:30:00.000Z", {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}),
+        ]
+    }
+    result = cost_mod.fmt_cost_multi({}, primary_model_id="deepseek-v4-pro", model_calls=calls)
+    assert result == "¥13.50", f"预期 ¥13.50，实际为 {result!r}"
+
+
+def test_fmt_cost_multi_per_call_tide_single_target():
+    """多模型混合调用（pro + flash）应 FX 转换后汇总到 primary 币种。"""
+    calls = {
+        "deepseek-v4-pro": [
+            ("2026-08-15T02:00:00.000Z", {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}),
+        ],
+        "deepseek-v4-flash": [
+            ("2026-08-15T05:30:00.000Z", {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}),
+        ],
+    }
+    result = cost_mod.fmt_cost_multi({}, primary_model_id="deepseek-v4-pro", model_calls=calls)
+    assert result == "¥10.50", f"预期 ¥9+¥1.5=¥10.50，实际为 {result!r}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 任务 (g)：xAI grok-4.5 / grok-4.6 定价
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_grok_4_6_pricing():
+    """grok-4.6（<200k prompt 档）：$2.00/$0.50/$6.00。"""
+    price, price_currency, _ = _resolve("grok-4.6")
+    assert price_currency == "USD"
+    assert price.get("input_per_1m") == 2.00
+    assert price.get("cache_read_per_1m") == 0.50
+    assert price.get("output_per_1m") == 6.00
+
+
+def test_grok_4_5_pricing():
+    """grok-4.5（<200k prompt 档）：$2.00/$0.30/$6.00。"""
+    price, price_currency, _ = _resolve("grok-4.5")
+    assert price_currency == "USD"
+    assert price.get("input_per_1m") == 2.00
+    assert price.get("cache_read_per_1m") == 0.30
+    assert price.get("output_per_1m") == 6.00
+
+
+def test_grok_build_variant_falls_back_to_base():
+    """grok-4.5-build 应剥 -build 后缀命中 grok-4.5（而非退化默认定价）。
+
+    回归保护：dot→dash 归一化会把 4.5 转成 4-5，若不对原始点号形式剥离，
+    将永远命中不了 grok-4.5，落入 $1/$4 默认定价（约 3× 低估）。
+    """
+    price, _, _ = _resolve("grok-4.5-build")
+    assert price.get("input_per_1m") == 2.00
+    assert price.get("output_per_1m") == 6.00
