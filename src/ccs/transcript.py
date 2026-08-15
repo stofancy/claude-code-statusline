@@ -280,7 +280,8 @@ def detect_growth_trend(recent_sizes: list[int]) -> str:
 
 def _empty_metrics() -> dict:
     return {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0,
-            "turn_count": 0, "context_len": 0, "compaction_count": 0, "model_usage": {}}
+            "turn_count": 0, "context_len": 0, "compaction_count": 0,
+            "model_usage": {}, "model_calls": {}}
 
 
 def _merge_metrics(dest: dict, src: dict) -> None:
@@ -297,6 +298,10 @@ def _merge_metrics(dest: dict, src: dict) -> None:
             dest["model_usage"][model_id] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         for tk in ("input", "output", "cache_read", "cache_write"):
             dest["model_usage"][model_id][tk] += usage.get(tk, 0)
+    # 逐调用明细（含时间戳）同样合并，供潮汐定价按调用时间精算
+    for model_id, calls in src.get("model_calls", {}).items():
+        dest.setdefault("model_calls", {}).setdefault(model_id, [])
+        dest["model_calls"][model_id].extend(calls)
 
 
 def _subagent_metrics(transcript_path: str) -> dict:
@@ -393,6 +398,7 @@ def get_session_metrics(transcript_path: str) -> dict:
     cache_read = 0
     cache_write = 0
     model_usage: dict[str, dict] = {}
+    model_calls: dict[str, list] = {}
     # (timestamp, usage)；随后按 timestamp 排序，避免文件顺序/去重替换位与时间分叉
     main_calls: list[tuple[str, dict]] = []
 
@@ -418,6 +424,12 @@ def get_session_metrics(transcript_path: str) -> dict:
         model_usage[model]["cache_write"] += cw
 
         ts = e.get("timestamp", "")
+        # 逐调用明细：(ts, usage)——供潮汐定价按每次调用时间精确计价
+        if model not in model_calls:
+            model_calls[model] = []
+        model_calls[model].append((ts or "", {
+            "input": it, "output": ot, "cache_read": cr, "cache_write": cw}))
+
         is_main = not e.get("isSidechain") and not e.get("isApiErrorMessage")
         if is_main:
             # 无 timestamp 时用空串；排序后仍保留，只是排在最前
@@ -444,6 +456,7 @@ def get_session_metrics(transcript_path: str) -> dict:
         "context_len": context_len,
         "compaction_count": compaction_count,
         "model_usage": model_usage,
+        "model_calls": model_calls,
     }
 
     # 聚合子代理 transcript（agent-*.jsonl）

@@ -1,6 +1,6 @@
 # Claude Code Statusline — Multi-Provider Pricing Table
 #
-# Verified against official sources on 2026-05-12 (Anthropic Sonnet 5 added 2026-07-01):
+# Verified against official sources on 2026-05-12 (Anthropic Opus 5 added 2026-07-24):
 #   • Anthropic: https://platform.claude.com/docs/en/docs/about-claude/pricing
 #   • DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 #   • OpenAI:    https://openai.com/api/pricing/
@@ -53,6 +53,12 @@ providers:
   # Pricing formula: cache_write_5m = 1.25 × input; cache_read = 0.1 × input.
   # ─────────────────────────────────────────────────────────────────────────
   anthropic:
+    claude-opus-5:
+      input_per_1m: 5.00
+      cache_write_per_1m: 6.25      # 5-minute cache write
+      cache_read_per_1m: 0.50
+      output_per_1m: 25.00
+
     claude-opus-4-8:
       input_per_1m: 5.00
       cache_write_per_1m: 6.25      # 5-minute cache write
@@ -153,32 +159,61 @@ providers:
   # DeepSeek — published with official CNY prices on api-docs.deepseek.com
   # (zh-cn/quick_start/pricing). USD equivalents use the implied exchange rate
   # from DeepSeek's own page (~6.9 CNY/USD, not the fx_rates table).
-  # V4-Pro permanent list price (75% promotional discount made permanent).
+  #
+  # 峰谷（潮汐）定价，官方自 2026-08-16 16:00 UTC（北京 2026-08-17 00:00）生效：
+  #   高峰时段 = 01:00–04:00 与 06:00–10:00 UTC（北京 9:00–12:00、14:00–18:00），
+  #   其余为空闲时段，价格为高峰的一半。
+  # 结构：`tide.peak_hours_utc` 声明高峰时段（半开区间 [start, end)），
+  # 每个币种块下用 `peak` / `off_peak` 两个子块分别计价。
   # ─────────────────────────────────────────────────────────────────────────
   deepseek:
     deepseek-v4-pro:
       currency: CNY
+      tide:
+        peak_hours_utc: [[1, 4], [6, 10]]
       prices:
         CNY:
-          input_per_1m: 3.00
-          input_cache_hit_per_1m: 0.025
-          output_per_1m: 6.00
+          peak:
+            input_per_1m: 9.0
+            input_cache_hit_per_1m: 0.30
+            output_per_1m: 27.0
+          off_peak:
+            input_per_1m: 4.5
+            input_cache_hit_per_1m: 0.15
+            output_per_1m: 13.5
         USD:
-          input_per_1m: 0.435
-          input_cache_hit_per_1m: 0.003625
-          output_per_1m: 0.87
+          peak:
+            input_per_1m: 1.32
+            input_cache_hit_per_1m: 0.044
+            output_per_1m: 3.96
+          off_peak:
+            input_per_1m: 0.66
+            input_cache_hit_per_1m: 0.022
+            output_per_1m: 1.98
 
     deepseek-v4-flash:
       currency: CNY
+      tide:
+        peak_hours_utc: [[1, 4], [6, 10]]
       prices:
         CNY:
-          input_per_1m: 1.00
-          input_cache_hit_per_1m: 0.02
-          output_per_1m: 2.00
+          peak:
+            input_per_1m: 3.0
+            input_cache_hit_per_1m: 0.10
+            output_per_1m: 9.0
+          off_peak:
+            input_per_1m: 1.5
+            input_cache_hit_per_1m: 0.05
+            output_per_1m: 4.5
         USD:
-          input_per_1m: 0.14
-          input_cache_hit_per_1m: 0.0028
-          output_per_1m: 0.28
+          peak:
+            input_per_1m: 0.44
+            input_cache_hit_per_1m: 0.014
+            output_per_1m: 1.32
+          off_peak:
+            input_per_1m: 0.22
+            input_cache_hit_per_1m: 0.007
+            output_per_1m: 0.66
 
     # Legacy names — being phased out per official docs, kept for back-compat.
     deepseek-chat:
@@ -243,6 +278,22 @@ providers:
       input_per_1m: 0.15
       cache_read_per_1m: 0.075
       output_per_1m: 0.60
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # xAI (Grok) — published in USD on docs.x.ai/developers/pricing.
+  # Grok 4.5/4.6 有按 prompt 长度分档：<200k 用下表，≥200k 输入/输出翻倍
+  # （4.6: $4/$1/$12；4.5: $4/$0.60/$12）。此处记录 <200k 常用档。
+  # ─────────────────────────────────────────────────────────────────────────
+  xai:
+    grok-4.6:
+      input_per_1m: 2.00
+      cache_read_per_1m: 0.50
+      output_per_1m: 6.00
+
+    grok-4.5:
+      input_per_1m: 2.00
+      cache_read_per_1m: 0.30
+      output_per_1m: 6.00
 
   # ─────────────────────────────────────────────────────────────────────────
   # Google Gemini — 2.5 series.
