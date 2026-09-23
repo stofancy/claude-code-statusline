@@ -54,7 +54,7 @@ Colour rules: green → yellow → red for context pressure (0–100%); green �
 | `TURNS` | `47c2` | Turn count. `cN` suffix = N context compactions occurred. No suffix = zero compactions |
 | `IN` | `512.384k` | Total non-cache input tokens. Parsed from JSONL transcript, immune to compaction resets |
 | `OUT` | `84.030k` | Total output tokens across all API calls |
-| `CACHE` | `96.351% 13.376M` | Cache hit rate + absolute cache read tokens. Formula: `cache_read / (input + cache_read)`. Inverted colour—higher rate = greener |
+| `CACHE` | `96.351% 13.376M` | Cache hit rate + absolute cache read tokens. Formula: `cache_read / (input + cache_read + cache_write)` — share of all prompt tokens served from cache (`cache_write` is 0 for providers that don't report it). Inverted colour—higher rate = greener |
 | `TOOLS` | `63` | Tool call count (includes failures from `PostToolUseFailure` hook) |
 | `AGENTS` | `2/1r` | Subagent events: total spawned / currently running (`r` suffix). Hides running count when zero |
 | Duration | `57m35s` | Elapsed session time from `started_at` |
@@ -356,7 +356,7 @@ Sessions older than 30 days are auto-cleaned. Delete `usage.db` to reset all acc
 | Statusline not showing | Verify `statusLine` config in `~/.claude/settings.json`, restart Claude Code |
 | Cost shows `-` | Check `pricing.yaml` exists; verify model ID matches a pricing entry |
 | NEXT shows `-` | Normal — no transcript in early session; populates after first response |
-| CACHE unusually high/low | Cache hit rate is `cache_read / (input + cache_read)`; >90% is normal for DeepSeek |
+| CACHE unusually high/low | Cache hit rate is `cache_read / (input + cache_read + cache_write)`; >90% is normal for DeepSeek |
 | TURNS shows `cN` | Compaction count — normal, indicates how many times context was compacted |
 | Numbers look wrong after restart | Delete `usage.db` to reset cumulative counters |
 

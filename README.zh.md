@@ -54,7 +54,7 @@ TURNS 47c2 │ IN 512.384k │ OUT 84.030k │ CACHE 96.351% 13.376M │ TOOLS 6
 | `TURNS` | `47c2` | 轮次数。`cN` 后缀 = N 次 context compaction。无后缀 = 零压缩 |
 | `IN` | `512.384k` | 总非缓存输入令牌。从 JSONL transcript 解析，不受压缩重置影响 |
 | `OUT` | `84.030k` | 所有 API 调用的总输出令牌 |
-| `CACHE` | `96.351% 13.376M` | 缓存命中率 + 缓存读取令牌绝对值。公式：`cache_read / (input + cache_read)`。反色——命中率越高越绿 |
+| `CACHE` | `96.351% 13.376M` | 缓存命中率 + 缓存读取令牌绝对值。公式：`cache_read / (input + cache_read + cache_write)`，即缓存读取占全部 prompt token 的比例（不报告 cache_write 的提供商该项为 0）。反色——命中率越高越绿 |
 | `TOOLS` | `63` | 工具调用次数（含 `PostToolUseFailure` 钩子记录的失败调用） |
 | `AGENTS` | `2/1r` | 子代理事件：总启动数 / 当前运行数（`r` 后缀）。无运行中时只显示总数 |
 | 持续时间 | `57m35s` | 会话已用时间，从 `started_at` 时间戳计算 |
@@ -319,7 +319,7 @@ Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件
 | 状态行未显示 | 检查 `~/.claude/settings.json` 中的 `statusLine` 配置，重启 Claude Code |
 | 成本显示 `-` | 检查 `pricing.yaml` 是否存在；验证模型 ID 是否匹配定价条目 |
 | NEXT 显示 `-` | 正常——会话早期尚无 transcript；首次响应后即会显示 |
-| CACHE 异常高/低 | 缓存命中率 = `cache_read / (input + cache_read)`；>90% 对 DeepSeek 属于正常 |
+| CACHE 异常高/低 | 缓存命中率 = `cache_read / (input + cache_read + cache_write)`；>90% 对 DeepSeek 属于正常 |
 | TURNS 显示 `cN` | 压缩次数——正常，表示上下文被压缩的次数 |
 | 重启后数字异常 | 删除 `usage.db` 重置累计计数器 |
 
