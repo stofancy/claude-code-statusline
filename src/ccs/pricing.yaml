@@ -121,14 +121,13 @@ providers:
       cache_read_per_1m: 1.50
       output_per_1m: 75.00
 
-    # Sonnet 5 introductory pricing ($2/$10) runs through 2026-08-31, then
-    # reverts to standard $3/$15 (same as Sonnet 4.6/4.5) on 2026-09-01.
-    # https://platform.claude.com/docs/en/about-claude/pricing#claude-sonnet-5-introductory-pricing
+    # Sonnet 5 standard pricing (the $2/$10 introductory price ended 2026-08-31).
+    # https://platform.claude.com/docs/en/about-claude/pricing
     claude-sonnet-5:
-      input_per_1m: 2.00
-      cache_write_per_1m: 2.50
-      cache_read_per_1m: 0.20
-      output_per_1m: 10.00
+      input_per_1m: 3.00
+      cache_write_per_1m: 3.75
+      cache_read_per_1m: 0.30
+      output_per_1m: 15.00
 
     claude-sonnet-4-6:
       input_per_1m: 3.00
