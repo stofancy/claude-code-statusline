@@ -1,5 +1,6 @@
 import json
 import sys
+import os
 import tempfile
 from pathlib import Path
 
@@ -105,7 +106,8 @@ def test_latest_rollout_picks_newest_mtime():
         new.parent.mkdir(parents=True)
         old.write_text("{}\n", encoding="utf-8")
         new.write_text("{}\n", encoding="utf-8")
-        old.touch()
-        new.touch()
+        # 显式错开 mtime：连续 touch 可能落在同一时间戳粒度内导致并列
+        os.utime(old, (1_000, 1_000))
+        os.utime(new, (2_000, 2_000))
 
         assert ct.latest_rollout(root) == new
