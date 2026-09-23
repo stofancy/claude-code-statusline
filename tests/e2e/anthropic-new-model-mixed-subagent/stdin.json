@@ -1,0 +1,26 @@
+{
+  "session_id": "e2e-session",
+  "version": "2.1.280",
+  "model": {
+    "id": "claude-opus-5-5[1m]",
+    "display_name": "Opus 5.5"
+  },
+  "context_window": {
+    "context_window_size": 1000000,
+    "used_percentage": 13.0,
+    "total_input_tokens": 0,
+    "current_usage": {
+      "input_tokens": 2000,
+      "output_tokens": 1500,
+      "cache_read_input_tokens": 120000,
+      "cache_creation_input_tokens": 3000
+    }
+  },
+  "transcript_path": "{case}/transcript.jsonl",
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 99,
+      "resets_at": 1790164860
+    }
+  }
+}

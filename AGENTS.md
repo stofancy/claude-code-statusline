@@ -84,6 +84,13 @@ Codex statusline tick ──stdin JSON──→ ccs-statusline
 
 官方用量相关环境变量：`CCS_USAGE_API=0` 关闭 `/api/oauth/usage` 网络请求（仅用 stdin 的 5h/7d 窗口）；`CCS_USAGE_TTL` 调整缓存刷新间隔（秒，最低 180）；`CLAUDE_CODE_OAUTH_TOKEN` 显式提供 OAuth token（否则自动从凭证文件/钥匙串读取）。
 
+## 测试
+
+- **`tests/test_e2e.py`（主体）**：黄金快照 E2E。每个 `tests/e2e/<场景>/` 是一套输入（`stdin.json`、transcript、`home/` 下的缓存与 `pricing.yaml`、`env.json`）加期望输出 `expected.ansi`；以子进程运行状态行，时间冻结在 2026-09-23T12:00Z、HOME 隔离、不联网。
+- **`tests/test_pricing.py`**：计价规则表驱动，只调公开的 `fmt_last_cost` / `fmt_cost_multi`。
+- 其余只保留规则密集且走公开函数的测试：transcript 去重与尖峰过滤、`usage.normalize`、balance 缓存不串味、catalog 刷新调度、codex。不为私有函数写单元测试。
+- 更新快照：`CCS_UPDATE_GOLDEN=1 python -m pytest tests/test_e2e.py`。更新前逐项核对 diff，并在提交说明里解释输出为何变化。
+
 ## 数据库生命周期
 
 位于 `~/.Codex/statusline/usage.db` 的 SQLite。30 天未更新的会话将被自动清理。删除 `.db` 文件以重置所有数据。`db.ensure_session()` 中的会话级幂等性缓存（`_known_sessions` 集合）在清理时被清除。

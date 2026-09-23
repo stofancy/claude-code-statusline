@@ -1,0 +1,18 @@
+{
+  "fetched_at": 1790164740,
+  "models": {
+    "gpt-5.4": {
+      "input_per_1m": 2.5,
+      "output_per_1m": 15.0,
+      "cache_read_per_1m": 0.25,
+      "tiers": [
+        {
+          "above": 272000,
+          "input_per_1m": 5.0,
+          "output_per_1m": 22.5,
+          "cache_read_per_1m": 0.5
+        }
+      ]
+    }
+  }
+}

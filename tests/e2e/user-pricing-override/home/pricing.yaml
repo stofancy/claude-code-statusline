@@ -1,0 +1,7 @@
+fx_rates:
+  CNY: 7.0
+providers:
+  mine:
+    my-local-model:
+      input_per_1m: 1.0
+      output_per_1m: 10.0

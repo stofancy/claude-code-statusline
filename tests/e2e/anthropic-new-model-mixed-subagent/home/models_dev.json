@@ -1,0 +1,11 @@
+{
+  "fetched_at": 1790164740,
+  "models": {
+    "claude-opus-5-5": {
+      "input_per_1m": 4.0,
+      "output_per_1m": 20.0,
+      "cache_read_per_1m": 0.2,
+      "cache_write_per_1m": 5.0
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "fetched_at": 1790164740,
+  "last_attempt": 1790164740,
+  "provider": "zhipu",
+  "data": {
+    "provider": "zhipu",
+    "type": "plan",
+    "quotas": [
+      {
+        "kind": "window",
+        "short": "5H",
+        "used_pct": 46.0,
+        "resets_at": null
+      },
+      {
+        "kind": "window",
+        "short": "7D",
+        "used_pct": 59.0,
+        "resets_at": null
+      }
+    ]
+  }
+}

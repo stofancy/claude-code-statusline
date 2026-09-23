@@ -1,0 +1,20 @@
+{
+  "session_id": "e2e-session",
+  "version": "2.1.280",
+  "model": {
+    "id": "my-local-model",
+    "display_name": "My Model"
+  },
+  "context_window": {
+    "context_window_size": 200000,
+    "used_percentage": 5.0,
+    "total_input_tokens": 0,
+    "current_usage": {
+      "input_tokens": 1000,
+      "output_tokens": 1000,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0
+    }
+  },
+  "transcript_path": "{case}/transcript.jsonl"
+}

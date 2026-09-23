@@ -1,0 +1,11 @@
+{
+  "fetched_at": 1790164740,
+  "last_attempt": 1790164740,
+  "provider": "deepseek",
+  "data": {
+    "provider": "deepseek",
+    "type": "monetary",
+    "currency": "CNY",
+    "balance": 110.5
+  }
+}

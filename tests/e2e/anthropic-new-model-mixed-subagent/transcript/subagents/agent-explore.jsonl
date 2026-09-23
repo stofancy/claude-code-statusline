@@ -1,0 +1,1 @@
+{"type": "assistant", "timestamp": "2026-09-23T10:05:00Z", "message": {"id": "msg_s1", "role": "assistant", "model": "deepseek-v4-flash", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 30000, "cache_read_input_tokens": 10000, "cache_creation_input_tokens": 0, "output_tokens": 2000}}, "isSidechain": true}

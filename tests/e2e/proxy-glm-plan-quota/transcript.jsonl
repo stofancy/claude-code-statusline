@@ -1,0 +1,2 @@
+{"type": "user", "timestamp": "2026-09-23T11:00:00Z", "message": {"role": "user", "content": "hi"}}
+{"type": "assistant", "timestamp": "2026-09-23T11:00:05Z", "message": {"id": "msg_g1", "role": "assistant", "model": "claude-opus-4-8", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 3000, "cache_read_input_tokens": 50000, "cache_creation_input_tokens": 0, "output_tokens": 800}}}
