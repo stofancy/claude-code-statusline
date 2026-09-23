@@ -15,5 +15,8 @@
       "cache_read_input_tokens": 0,
       "cache_creation_input_tokens": 4000
     }
+  },
+  "cost": {
+    "total_cost_usd": 0.02
   }
 }

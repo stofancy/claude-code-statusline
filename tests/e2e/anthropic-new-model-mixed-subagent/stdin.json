@@ -23,7 +23,7 @@
       "resets_at": 1790172000
     }
   },
-  "prompt_cache": {
-    "ttl": "1h"
+  "cost": {
+    "total_cost_usd": 0.75
   }
 }

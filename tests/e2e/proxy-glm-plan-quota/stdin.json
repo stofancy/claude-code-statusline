@@ -16,5 +16,8 @@
       "cache_creation_input_tokens": 0
     }
   },
-  "transcript_path": "{case}/transcript.jsonl"
+  "transcript_path": "{case}/transcript.jsonl",
+  "cost": {
+    "total_cost_usd": 9.99
+  }
 }

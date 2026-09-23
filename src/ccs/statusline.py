@@ -112,8 +112,6 @@ def main() -> None:
     pc_cache_write = cu.get("cache_creation_input_tokens", 0) or 0
 
     per_call_total_input = pc_input + pc_cache_read + pc_cache_write
-    # current_usage 不区分缓存写入时长；prompt_cache.ttl 给出本会话写入的是哪种缓存
-    cache_1h = (data.get("prompt_cache") or {}).get("ttl") == "1h"
 
     try:
         db.ensure_session(session_id, model_id, model_name)
@@ -207,21 +205,33 @@ def main() -> None:
     subagent_total = agg["subagent_total"]
     subagent_running = agg["subagent_running"]
 
+    official_usd = cost_data.get("total_cost_usd") if isinstance(cost_data, dict) else None
     try:
-        # TOTAL：优先用带时间戳的逐调用明细精算（潮汐定价按调用时刻选峰谷价）；
-        # 无明细时回退 DB 按模型聚合（以当前时刻计价）。
-        cost_str = cost_mod.fmt_cost_multi(
-            db.get_model_breakdown(session_id),
-            primary_model_id=actual_model_id or None,
-            model_calls=metrics.get("model_calls"),
-        )
+        if (balance_provider == "anthropic" and isinstance(official_usd, (int, float))
+                and official_usd > 0):
+            # 直连 Anthropic：Claude Code 自己的累计费用还包含 transcript 里看不到的
+            # 后台调用（实测约多 15%）。走代理时它按 Claude 价格计，不能用。
+            cost_str = cost_mod.fmt_usd(official_usd)
+        else:
+            # 逐调用明细精算（峰谷按调用时刻、分档按每次 prompt 大小）；
+            # 无明细时回退 DB 按模型聚合。
+            cost_str = cost_mod.fmt_cost_multi(
+                db.get_model_breakdown(session_id),
+                primary_model_id=actual_model_id or None,
+                model_calls=metrics.get("model_calls"),
+            )
     except Exception:
-        cc_cost = cost_data.get("total_cost_usd", 0) if isinstance(cost_data, dict) else 0
-        cost_str = f"${cc_cost:.2f}" if cc_cost else "-"
+        cost_str = "-"
 
+    # 上次：transcript 里最后一次主线程调用带缓存时长拆分和调用时间；
+    # 没有 transcript 时退回 stdin 的 current_usage。
+    last_call = metrics.get("last_call")
     try:
-        last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write,
-                                               pc_cache_write if cache_1h else 0)
+        if last_call:
+            last_cost_str = cost_mod.fmt_cost_multi({}, model_calls={
+                _resolve_actual_model_id(last_call["model"]): [(last_call["at"], last_call["usage"])]})
+        else:
+            last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
     except Exception:
         last_cost_str = "-"
 
@@ -231,8 +241,11 @@ def main() -> None:
         pred_cache = int(replay_tokens * pc_cache_read // pc_total)
         pred_cache_write = int(replay_tokens * pc_cache_write // pc_total)
         pred_input = max(0, replay_tokens - pred_cache - pred_cache_write)
+        # 缓存写入的 1 小时占比沿用最后一次调用
+        lu = (last_call or {}).get("usage") or {}
+        ratio_1h = lu.get("cache_write_1h", 0) / lu["cache_write"] if lu.get("cache_write") else 0
         pred_cost_str = cost_mod.fmt_last_cost(actual_model_id, pred_input, pred_output, pred_cache, pred_cache_write,
-                                               pred_cache_write if cache_1h else 0)
+                                               int(pred_cache_write * ratio_1h))
     except Exception:
         pred_cost_str = "-"
 

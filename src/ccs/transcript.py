@@ -292,7 +292,7 @@ def detect_growth_trend(recent_sizes: list[int]) -> str:
 def _empty_metrics() -> dict:
     return {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0,
             "turn_count": 0, "context_len": 0, "compaction_count": 0,
-            "model_usage": {}, "model_calls": {}}
+            "model_usage": {}, "model_calls": {}, "last_call": None}
 
 
 def _merge_metrics(dest: dict, src: dict) -> None:
@@ -412,6 +412,7 @@ def get_session_metrics(transcript_path: str) -> dict:
     model_calls: dict[str, list] = {}
     # (timestamp, usage)；随后按 timestamp 排序，避免文件顺序/去重替换位与时间分叉
     main_calls: list[tuple[str, dict]] = []
+    last_call: dict | None = None
 
     for e in deduped:
         usage = e.get("message", {}).get("usage", {})
@@ -447,6 +448,8 @@ def get_session_metrics(transcript_path: str) -> dict:
         if is_main:
             # 无 timestamp 时用空串；排序后仍保留，只是排在最前
             main_calls.append((ts or "", usage))
+            if last_call is None or (ts or "") >= last_call["at"]:
+                last_call = {"model": model, "at": ts or "", "usage": model_calls[model][-1][1]}
 
     main_calls.sort(key=lambda item: item[0])
     main_usages = [u for _, u in main_calls]
@@ -470,6 +473,8 @@ def get_session_metrics(transcript_path: str) -> dict:
         "compaction_count": compaction_count,
         "model_usage": model_usage,
         "model_calls": model_calls,
+        # 最后一次主线程调用（含缓存时长拆分与时间戳），供「上次」精确计价
+        "last_call": last_call,
     }
 
     # 聚合子代理 transcript（agent-*.jsonl）

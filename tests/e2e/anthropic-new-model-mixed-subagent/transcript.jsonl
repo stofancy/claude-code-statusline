@@ -7,4 +7,4 @@
 {"type": "user", "timestamp": "2026-09-23T10:06:01Z", "isMeta": true, "message": {"role": "user", "content": "Base directory for this skill: /tmp/skill"}}
 {"type": "system", "subtype": "compact_boundary", "timestamp": "2026-09-23T10:30:00Z"}
 {"type": "user", "timestamp": "2026-09-23T11:00:00Z", "message": {"role": "user", "content": "继续"}, "origin": {"kind": "human"}}
-{"type": "assistant", "timestamp": "2026-09-23T11:00:05Z", "message": {"id": "msg_a3", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 2000, "cache_read_input_tokens": 120000, "cache_creation_input_tokens": 3000, "output_tokens": 1500}}}
+{"type": "assistant", "timestamp": "2026-09-23T11:00:05Z", "message": {"id": "msg_a3", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 2000, "cache_read_input_tokens": 120000, "cache_creation_input_tokens": 3000, "output_tokens": 1500, "cache_creation": {"ephemeral_1h_input_tokens": 3000, "ephemeral_5m_input_tokens": 0}}}}

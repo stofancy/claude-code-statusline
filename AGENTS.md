@@ -50,7 +50,7 @@ Codex statusline tick ──stdin JSON──→ ccs-statusline
 
 ### 模块职责
 
-- **`statusline.py`** — 编排管道：解析 stdin JSON → `get_session_metrics()` 解析 JSONL transcript → `update_session_tokens()` 写入 SQLite → `get_all_totals()` / `get_model_breakdown()` 读取 → 成本计算 → 渲染。保留 stdin `current_usage` 用于 LAST cost 和 NEXT replay 估算。
+- **`statusline.py`** — 编排管道：解析 stdin JSON → `get_session_metrics()` 解析 JSONL transcript → `update_session_tokens()` 写入 SQLite → `get_all_totals()` / `get_model_breakdown()` 读取 → 成本计算 → 渲染。总计：直连 Anthropic 时用 stdin 的 `cost.total_cost_usd`（含 transcript 看不到的后台调用），否则按 transcript 逐调用计价；上次：transcript 最后一次主线程调用（无 transcript 时用 stdin `current_usage`）；NEXT 用 `current_usage` 估算。
 - **`tracker.py`** — 将 `ccs-tracker --event <stop|tool|subagent-start|subagent-stop>` 分派到 db.py 写入。退出码始终为 0（即使出现异常）以防止 hook 错误。
 - **`db.py`** — 位于 `~/.Codex/statusline/usage.db` 的 SQLite（WAL 模式）。四张表：`sessions`（会话元数据、聚合令牌/轮次/子代理计数器）、`model_usage`（按模型分解的 token 追踪）、`tool_calls`、`subagent_events`。`update_session_tokens()` 和 `update_model_usage()` 直接写入 JSONL 解析值，无需 snapshot diff。
 - **`cost.py`** — 多提供商定价。用户 `pricing.yaml` 叠加合并到内置表之上；对每个候选 id（由具体到泛化）依次查：钉住的 YAML 条目（来自用户文件，或带 `currency`/`prices`/`tide`/`tiers`）→ models.dev 目录（`catalog.lookup`）→ 普通内置条目 → 后备默认值。`tiers` 按每次调用的 prompt 大小（input+cache_read+cache_write）选档。汇率：用户 `fx_rates` → 每日拉取 → 内置快照。模型 ID 匹配：先精确查找，去除 `[1m]` 后缀，逐段剥离尾部版本号。`fmt_cost_multi()` 按模型分别定价加总；`fmt_last_cost()` 处理 per-call 成本（含 Anthropic cache_write）。
@@ -66,7 +66,7 @@ Codex statusline tick ──stdin JSON──→ ccs-statusline
 
 **子代理聚合（transcript.py:_subagent_metrics）：** 扫描 `{session_id}/subagents/agent-*.jsonl`，每个子代理独立解析后合并到主指标。子代理模型可能与主会话不同（如 flash vs pro），各模型独立追踪、独立计价。
 
-**成本计算（cost.py:fmt_cost_multi）：** 从 `model_usage` 表获取每模型分解用量，分别定价后加总。JSONL 的 `input` 已是纯非缓存输入，无需减法拆解。Anthropic 提供商的 `cache_write` 独立计费。`fmt_last_cost` 使用 stdin `current_usage` 计算最近一次调用的精确成本。
+**成本计算（cost.py:fmt_cost_multi）：** 从 `model_usage` 表获取每模型分解用量，分别定价后加总。JSONL 的 `input` 已是纯非缓存输入，无需减法拆解。Anthropic 提供商的 `cache_write` 独立计费，其中 1 小时缓存（`usage.cache_creation.ephemeral_1h_input_tokens`）按 2× 输入价。直连 Anthropic 时状态行的总计改用 Claude Code 自己的 `cost.total_cost_usd`。
 
 **会话聚合（db.py:get_all_totals）：** 通过 `conversation_id` 隔离不同对话。子代理与主会话共享 `session_id`，同一对话的所有统计聚合到同一行。
 

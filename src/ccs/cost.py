@@ -700,6 +700,12 @@ def fmt_cost_multi(
     return _fmt_cost_val(_symbol_for(display_target), total)
 
 
+def fmt_usd(amount: float) -> str:
+    """Render a USD amount (e.g. Claude Code's own cost total) in the display currency."""
+    _, display, fx_rates = _currency_settings()
+    return _fmt_cost_val(_symbol_for(display), _fx_convert(amount, "USD", display, fx_rates))
+
+
 def fmt_last_cost(
     model_id: str,
     per_call_input: int,

@@ -10,8 +10,8 @@
     "used_percentage": 5.0,
     "total_input_tokens": 0,
     "current_usage": {
-      "input_tokens": 1000,
-      "output_tokens": 1000,
+      "input_tokens": 1000000,
+      "output_tokens": 100000,
       "cache_read_input_tokens": 0,
       "cache_creation_input_tokens": 0
     }
