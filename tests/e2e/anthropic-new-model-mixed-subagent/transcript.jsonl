@@ -1,8 +1,10 @@
-{"type": "user", "timestamp": "2026-09-23T10:00:00Z", "message": {"role": "user", "content": "重构价格模块"}}
-{"type": "assistant", "timestamp": "2026-09-23T10:00:05Z", "message": {"id": "msg_a1", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 5000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 60000, "output_tokens": 800}}}
+{"type": "user", "timestamp": "2026-09-23T10:00:00Z", "message": {"role": "user", "content": "重构价格模块"}, "origin": {"kind": "human"}}
+{"type": "assistant", "timestamp": "2026-09-23T10:00:05Z", "message": {"id": "msg_a1", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 5000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 60000, "output_tokens": 800, "cache_creation": {"ephemeral_1h_input_tokens": 60000, "ephemeral_5m_input_tokens": 0}}}}
 {"type": "user", "timestamp": "2026-09-23T10:00:10Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}}
 {"type": "assistant", "timestamp": "2026-09-23T10:00:20Z", "message": {"id": "msg_a2", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 100, "cache_read_input_tokens": 60000, "cache_creation_input_tokens": 2000, "output_tokens": 10}}}
 {"type": "assistant", "timestamp": "2026-09-23T10:00:21Z", "message": {"id": "msg_a2", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 100, "cache_read_input_tokens": 60000, "cache_creation_input_tokens": 2000, "output_tokens": 900}}}
+{"type": "user", "timestamp": "2026-09-23T10:06:00Z", "isMeta": true, "origin": {"kind": "peer", "from": "agent-explore"}, "message": {"role": "user", "content": "Another Claude session sent a message:\n<agent-message>统计完成</agent-message>"}}
+{"type": "user", "timestamp": "2026-09-23T10:06:01Z", "isMeta": true, "message": {"role": "user", "content": "Base directory for this skill: /tmp/skill"}}
 {"type": "system", "subtype": "compact_boundary", "timestamp": "2026-09-23T10:30:00Z"}
-{"type": "user", "timestamp": "2026-09-23T11:00:00Z", "message": {"role": "user", "content": "继续"}}
+{"type": "user", "timestamp": "2026-09-23T11:00:00Z", "message": {"role": "user", "content": "继续"}, "origin": {"kind": "human"}}
 {"type": "assistant", "timestamp": "2026-09-23T11:00:05Z", "message": {"id": "msg_a3", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": 2000, "cache_read_input_tokens": 120000, "cache_creation_input_tokens": 3000, "output_tokens": 1500}}}

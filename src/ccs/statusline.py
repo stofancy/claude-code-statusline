@@ -36,7 +36,11 @@ def _stdin_windows(rate_limits: dict) -> list[dict]:
 
 
 def _resolve_official_usage(version, rate_limits: dict) -> dict | None:
-    """合并 API 与 stdin 两路官方用量；逐窗口以 API 为准、stdin 兜底。"""
+    """合并 API 与 stdin 两路官方用量。
+
+    stdin 的 rate_limits 每次刷新都是实时值，API 结果最多缓存 5 分钟，所以同一
+    窗口以 stdin 为准；API 补齐 stdin 没有的窗口和月度预算。
+    """
     try:
         api = usage_mod.get_usage(version)
     except Exception:
@@ -49,10 +53,10 @@ def _resolve_official_usage(version, rate_limits: dict) -> dict | None:
             return None
         return {"subscription_type": None, "windows": stdin_windows, "monthly": None}
 
-    # API 窗口优先，缺失的窗口用 stdin 补齐（保持 5H→7D 顺序）。
-    have = {w["label"] for w in api.get("windows", [])}
-    merged = list(api.get("windows", []))
-    for w in stdin_windows:
+    # stdin 窗口优先，缺失的窗口用 API 补齐（保持 5H→7D 顺序）。
+    have = {w["label"] for w in stdin_windows}
+    merged = list(stdin_windows)
+    for w in api.get("windows", []):
         if w["label"] not in have:
             merged.append(w)
     merged.sort(key=lambda w: 0 if w["label"] == "5H" else 1)
@@ -108,6 +112,8 @@ def main() -> None:
     pc_cache_write = cu.get("cache_creation_input_tokens", 0) or 0
 
     per_call_total_input = pc_input + pc_cache_read + pc_cache_write
+    # current_usage 不区分缓存写入时长；prompt_cache.ttl 给出本会话写入的是哪种缓存
+    cache_1h = (data.get("prompt_cache") or {}).get("ttl") == "1h"
 
     try:
         db.ensure_session(session_id, model_id, model_name)
@@ -214,7 +220,8 @@ def main() -> None:
         cost_str = f"${cc_cost:.2f}" if cc_cost else "-"
 
     try:
-        last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
+        last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write,
+                                               pc_cache_write if cache_1h else 0)
     except Exception:
         last_cost_str = "-"
 
@@ -224,7 +231,8 @@ def main() -> None:
         pred_cache = int(replay_tokens * pc_cache_read // pc_total)
         pred_cache_write = int(replay_tokens * pc_cache_write // pc_total)
         pred_input = max(0, replay_tokens - pred_cache - pred_cache_write)
-        pred_cost_str = cost_mod.fmt_last_cost(actual_model_id, pred_input, pred_output, pred_cache, pred_cache_write)
+        pred_cost_str = cost_mod.fmt_last_cost(actual_model_id, pred_input, pred_output, pred_cache, pred_cache_write,
+                                               pred_cache_write if cache_1h else 0)
     except Exception:
         pred_cost_str = "-"
 

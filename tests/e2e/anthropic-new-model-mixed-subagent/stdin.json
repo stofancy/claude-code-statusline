@@ -19,8 +19,11 @@
   "transcript_path": "{case}/transcript.jsonl",
   "rate_limits": {
     "five_hour": {
-      "used_percentage": 99,
-      "resets_at": 1790164860
+      "used_percentage": 47,
+      "resets_at": 1790172000
     }
+  },
+  "prompt_cache": {
+    "ttl": "1h"
   }
 }

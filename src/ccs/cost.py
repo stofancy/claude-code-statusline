@@ -590,7 +590,12 @@ def _model_cost_in_native(price: dict, usage: dict) -> float:
             + _per_1m(output_price, total_output))
 
     if "cache_write_per_1m" in price:
-        cost += _per_1m(price["cache_write_per_1m"], cache_write)
+        # usage["cache_write_1h"] 是 cache_write 中写入 1 小时缓存的部分；
+        # Anthropic 的 1 小时缓存写入价为 2× 基础输入价（5 分钟为 1.25×）。
+        cw_1h = min(usage.get("cache_write_1h", 0) or 0, cache_write)
+        cw_1h_price = price.get("cache_write_1h_per_1m", input_price * 2)
+        cost += (_per_1m(price["cache_write_per_1m"], cache_write - cw_1h)
+                 + _per_1m(cw_1h_price, cw_1h))
 
     return cost
 
@@ -701,6 +706,7 @@ def fmt_last_cost(
     per_call_output: int,
     per_call_cache_read: int,
     per_call_cache_write: int = 0,
+    per_call_cache_write_1h: int = 0,
 ) -> str:
     """Cost of the most recent turn for a single model.
 
@@ -718,6 +724,7 @@ def fmt_last_cost(
         "output": per_call_output,
         "cache_read": per_call_cache_read,
         "cache_write": per_call_cache_write,
+        "cache_write_1h": per_call_cache_write_1h,
     }
     price, price_currency, target = _resolve_price(
         model_id, display, base, prompt_tokens=_prompt_tokens(usage))

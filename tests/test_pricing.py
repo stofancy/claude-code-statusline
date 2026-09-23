@@ -54,6 +54,7 @@ def write_user_pricing(text):
     ("openrouter/anthropic/claude-opus-4-8[1m]", "$3.05"),
     ("claude-opus-4", "$9.15"),                          # 旧 Opus 仍为 $15/$75
     ("claude-haiku-4.5", "$0.610"),
+    ("claude-sonnet-5", "$1.22"),                         # $2/$10 已转为标准价
     ("opencode/claude-sonnet-4-6", "$1.83"),
     ("gpt-5.6-sol", "$3.55"),
     ("gpt-5-6-sol", "$3.55"),
@@ -69,6 +70,12 @@ def test_builtin_usd_models(usd, model_id, expected):
 
 def test_anthropic_cache_write_billed(usd):
     assert last_cost("claude-opus-4-8", cache_write=100_000) == "$0.625"
+
+
+def test_anthropic_1h_cache_write_is_2x_input(usd):
+    # 1 小时缓存写入 = 2× 基础输入价（$5 → $10）；只有标记为 1h 的部分按此计
+    assert cost_mod.fmt_last_cost("claude-opus-4-8", 0, 0, 0, 100_000, 100_000) == "$1.00"
+    assert cost_mod.fmt_last_cost("claude-opus-4-8", 0, 0, 0, 100_000, 40_000) == "$0.775"
 
 
 @pytest.mark.parametrize("model_id, expected", [

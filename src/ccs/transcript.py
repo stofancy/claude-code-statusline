@@ -215,8 +215,19 @@ def parse_transcript(path: str | None) -> list[dict]:
 
 
 def _is_human_user_turn(ev: dict) -> bool:
-    """是否为真人对话轮次（排除 tool_result / 斜杠命令 / 本地命令回显 / task 通知）。"""
+    """是否为真人对话轮次。
+
+    Claude Code 为每条 user 事件标注 ``origin.kind``（真人输入为 ``human``；
+    子代理交回为 ``peer``，任务通知为 ``task-notification``），有则以它为准。
+    旧 transcript 没有该字段时，排除 ``isMeta``（skill 展开等注入内容）后按文本
+    前缀排除 tool_result / 斜杠命令 / 本地命令回显 / task 通知。
+    """
     if ev.get("type") != "user":
+        return False
+    origin = ev.get("origin")
+    if isinstance(origin, dict) and origin.get("kind"):
+        return origin["kind"] == "human" and bool(str(_extract_text(ev) or "").strip())
+    if ev.get("isMeta"):
         return False
     text = _extract_text(ev)
     if not text or not str(text).strip():
@@ -427,8 +438,10 @@ def get_session_metrics(transcript_path: str) -> dict:
         # 逐调用明细：(ts, usage)——供潮汐定价按每次调用时间精确计价
         if model not in model_calls:
             model_calls[model] = []
+        cw_1h = (usage.get("cache_creation") or {}).get("ephemeral_1h_input_tokens", 0) or 0
         model_calls[model].append((ts or "", {
-            "input": it, "output": ot, "cache_read": cr, "cache_write": cw}))
+            "input": it, "output": ot, "cache_read": cr, "cache_write": cw,
+            "cache_write_1h": cw_1h}))
 
         is_main = not e.get("isSidechain") and not e.get("isApiErrorMessage")
         if is_main:
