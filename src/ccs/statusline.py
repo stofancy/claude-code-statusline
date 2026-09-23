@@ -4,6 +4,7 @@ import json
 import sys
 
 from . import db
+from . import catalog
 from . import cost as cost_mod
 from . import transcript as tx_mod
 from . import renderer
@@ -253,6 +254,12 @@ def main() -> None:
     except Exception as exc:
         print(f"\033[31mccs error: {exc}\033[0m", file=sys.stderr)
         sys.exit(0)
+
+    # 价格目录 / 汇率过期时派生后台进程刷新；渲染已完成，绝不阻塞
+    try:
+        catalog.maybe_refresh()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

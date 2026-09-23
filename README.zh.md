@@ -191,7 +191,9 @@ command = '"/path/to/python" -m ccs.codex_statusline'
 
 ## 定价
 
-内置定价表位于 `src/ccs/pricing.yaml`。可通过 `~/.claude/statusline/pricing.yaml` 覆盖。
+美元标价每天从 [models.dev](https://models.dev) 拉取，汇率每天从 open.er-api.com 拉取，均由后台独立进程完成（状态行从不等待网络；缓存位于 `~/.claude/statusline/models_dev.json` 与 `fx_rates.json`）。手动刷新：`python -m ccs.catalog --force`。
+
+内置定价表 `src/ccs/pricing.yaml` 保存 models.dev 无法表达的信息——人民币原生价、DeepSeek 峰谷价、自定义分档——这些条目优先；普通美元条目仅作离线兜底。`~/.claude/statusline/pricing.yaml` 叠加在内置表之上且始终优先（只写部分条目即可）。按上下文长度分档（`tiers: [{above: N, ...}]`）逐次调用精确计价。
 
 所有价格均以 **CNY（¥）** 每百万 token 计。
 
@@ -252,6 +254,7 @@ Claude Code statusline tick (every 15s) → ccs-statusline
 | `renderer.py` | — | 256 色条、token 格式化、双行布局 |
 | `util.py` | — | 共享 stdin JSON 读取器 |
 | `pricing.yaml` | — | 可配置的提供商定价表 |
+| `catalog.py` | — | models.dev 价格目录 + 每日汇率（后台刷新） |
 
 ### Token 统计原理
 
@@ -288,6 +291,7 @@ Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件
 | `CCS_DEBUG=1` | 将原始 hook 数据写入 `~/.claude/statusline/debug.log` |
 | `CCS_USAGE_API=0` | 关闭官方 `/api/oauth/usage` 查询（Pro/Max 的 stdin 5H/7D 窗口仍显示） |
 | `CCS_USAGE_TTL` | 官方用量缓存刷新间隔（秒，最低 `180`，默认 `300`） |
+| `CCS_PRICING_API` | `0` 关闭 models.dev 价格目录与每日汇率拉取 |
 | `CLAUDE_CODE_OAUTH_TOKEN` | 显式提供 OAuth token；否则自动从凭证文件 / 钥匙串读取 |
 | `CCS_BALANCE_API=0` | 关闭提供商余额/额度/配额查询 |
 | `CCS_BALANCE_TTL` | 提供商余额缓存刷新间隔（秒，最低 `180`，默认 `300`） |

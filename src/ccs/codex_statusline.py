@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 
+from . import catalog
 from . import codex_transcript
 from . import cost as cost_mod
 from . import renderer
@@ -105,6 +106,11 @@ def main(argv: list[str] | None = None) -> None:
         print(output)
     else:
         print(json.dumps({"systemMessage": "\n" + output}, ensure_ascii=False))
+
+    try:
+        catalog.maybe_refresh()
+    except Exception:
+        pass
 
 
 def _read_hook_payload() -> dict:

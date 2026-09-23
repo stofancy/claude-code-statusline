@@ -26,6 +26,21 @@
 # (e.g. `CCS_CURRENCY=USD`) or by setting `display_currency` in a
 # user-level `~/.claude/statusline/pricing.yaml`. FX rates are in
 # `fx_rates` below, expressed as *units of currency per 1 USD*.
+#
+# Relationship to models.dev (ccs/catalog.py)
+# -------------------------------------------
+# USD list prices are also fetched daily from https://models.dev, and FX
+# rates daily from open.er-api.com. Per model id:
+#   • entries with `currency` / `prices` / `tide` / `tiers`
+#     (and everything in the user's pricing.yaml) always win — they encode
+#     what models.dev cannot (native CNY prices, 峰谷, custom tiers);
+#   • otherwise models.dev wins, and plain USD entries here are only the
+#     offline fallback.
+# `fx_rates` below is likewise only the fallback for the fetched rates;
+# `fx_rates` in the user's pricing.yaml pins a rate.
+#
+# Context-length tiers: `tiers: [{above: N, <rates>}]` — a call whose prompt
+# (input + cache_read + cache_write) exceeds N tokens is billed at that tier.
 
 base_currency: USD
 display_currency: CNY
@@ -281,31 +296,45 @@ providers:
 
   # ─────────────────────────────────────────────────────────────────────────
   # xAI (Grok) — published in USD on docs.x.ai/developers/pricing.
-  # Grok 4.5/4.6 有按 prompt 长度分档：<200k 用下表，≥200k 输入/输出翻倍
-  # （4.6: $4/$1/$12；4.5: $4/$0.60/$12）。此处记录 <200k 常用档。
+  # Grok 4.5/4.6 按 prompt 长度分档：≤200k 用基础价，>200k 走 tiers
+  # （输入/输出翻倍）。tiers 按每次调用的 prompt 大小精确选档。
   # ─────────────────────────────────────────────────────────────────────────
   xai:
     grok-4.6:
       input_per_1m: 2.00
       cache_read_per_1m: 0.50
       output_per_1m: 6.00
+      tiers:
+        - above: 200000
+          input_per_1m: 4.00
+          cache_read_per_1m: 1.00
+          output_per_1m: 12.00
 
     grok-4.5:
       input_per_1m: 2.00
       cache_read_per_1m: 0.30
       output_per_1m: 6.00
+      tiers:
+        - above: 200000
+          input_per_1m: 4.00
+          cache_read_per_1m: 0.60
+          output_per_1m: 12.00
 
   # ─────────────────────────────────────────────────────────────────────────
   # Google Gemini — 2.5 series.
-  # Gemini 2.5 Pro has tiered pricing by prompt length; values below are for
-  # ≤200k input tokens (the common case). >200k tokens charges:
-  #   input $2.50, cached $0.25, output $15.00.
+  # Gemini 2.5 Pro has tiered pricing by prompt length: base rates apply to
+  # prompts ≤200k tokens, the `tiers` entry to prompts >200k.
   # ─────────────────────────────────────────────────────────────────────────
   google:
     gemini-2.5-pro:
       input_per_1m: 1.25
       cache_read_per_1m: 0.125
       output_per_1m: 10.00
+      tiers:
+        - above: 200000
+          input_per_1m: 2.50
+          cache_read_per_1m: 0.25
+          output_per_1m: 15.00
 
     gemini-2.5-flash:
       input_per_1m: 0.30

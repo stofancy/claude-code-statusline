@@ -206,6 +206,7 @@ Restart Codex after installation, then review and trust the new hook with
 | `CCS_CURRENCY` | Display currency — `USD`, `CNY`, `EUR`, `GBP`, `JPY`, `AUD`, `INR`, `HKD`, `SGD`, `KRW`, `CAD`, `CHF`, `TWD`. Overrides `display_currency` in `pricing.yaml`. Prices stay in `base_currency` (USD by default) and are converted via the `fx_rates` block. |
 | `CCS_USAGE_API` | When `0`/`false`, disables the official `/api/oauth/usage` query — only the stdin 5H/7D windows remain. Default on. |
 | `CCS_USAGE_TTL` | Official-usage cache refresh interval in seconds (min `180`, default `300`). |
+| `CCS_PRICING_API` | `0` disables the daily models.dev price catalog and FX-rate fetch (YAML tables only). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token for usage queries; otherwise auto-read from `~/.claude/.credentials.json` / macOS keychain. |
 | `CCS_BALANCE_API` | When `0`/`false`, disables provider balance/credits/quota network queries. Default on. |
 | `CCS_BALANCE_TTL` | Provider-balance cache refresh interval in seconds (min `180`, default `300`). |
@@ -220,7 +221,9 @@ Restart Codex after installation, then review and trust the new hook with
 
 ## Pricing
 
-Built-in pricing table at `src/ccs/pricing.yaml`. Override with `~/.claude/statusline/pricing.yaml`.
+USD list prices are fetched daily from [models.dev](https://models.dev) and FX rates from open.er-api.com, in a detached background process (the status line never waits on it; caches live in `~/.claude/statusline/models_dev.json` and `fx_rates.json`). Run `python -m ccs.catalog --force` to refresh by hand.
+
+The built-in table at `src/ccs/pricing.yaml` holds what models.dev cannot express — native CNY prices, DeepSeek peak/off-peak, custom tiers — and those entries win; plain USD entries are only the offline fallback. `~/.claude/statusline/pricing.yaml` is merged on top and always wins (a partial file is fine). Context-length tiers (`tiers: [{above: N, ...}]`) are priced per call.
 
 All prices in **CNY (¥)** per million tokens.
 
@@ -288,6 +291,7 @@ Claude Code statusline tick (every 15s) → ccs-statusline
 | `renderer.py` | — | 256-colour bars, token formatting, 2-line layout |
 | `util.py` | — | Shared stdin JSON reader |
 | `pricing.yaml` | — | Configurable provider pricing table |
+| `catalog.py` | — | Daily models.dev price catalog + FX rates (background refresh) |
 
 ### How Token Counting Works
 
@@ -324,6 +328,7 @@ Subagents often use a different model (e.g. `deepseek-v4-flash` for subagents vs
 | `CCS_DEBUG=1` | Write raw hook data to `~/.claude/statusline/debug.log` |
 | `CCS_USAGE_API=0` | Disable the official `/api/oauth/usage` query (stdin 5H/7D windows still show) |
 | `CCS_USAGE_TTL` | Official-usage cache refresh interval in seconds (min `180`, default `300`) |
+| `CCS_PRICING_API` | `0` disables models.dev prices + daily FX rates |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token; otherwise read from credentials file / keychain |
 | `CCS_BALANCE_API=0` | Disable provider balance/credits/quota queries |
 | `CCS_BALANCE_TTL` | Provider-balance cache refresh interval in seconds (min `180`, default `300`) |

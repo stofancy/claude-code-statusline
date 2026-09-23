@@ -60,6 +60,8 @@ from pathlib import Path
 
 import yaml
 
+from . import catalog
+
 # 剥离模型 ID 末尾的 ``[1m]`` / ``[1M]`` 后缀。该正则覆盖两类来源：
 #
 #   1. MiniMax / DeepSeek 等提供商的「1 小时缓存变体」标识——当请求携带
@@ -103,44 +105,100 @@ _CURRENCY_SYMBOLS = {
 
 _DEBUG_LOG = Path.home() / ".claude" / "statusline" / "debug.log"
 
+# 带这些键的 YAML 条目表达了 models.dev 无法表达的信息（原生币种、峰谷、
+# 自定义分档），同一候选 id 下优先于 models.dev。
+_PINNED_KEYS = ("currency", "prices", "tide", "tiers")
+
+# 分档合并时按「同义键组」整组替换，避免 tier 的 cache_read_per_1m 被基础块
+# 残留的 input_cache_hit_per_1m（优先级更高的别名）遮蔽。
+_PRICE_KEY_GROUPS = (
+    ("input_per_1m", "input"),
+    ("output_per_1m", "output"),
+    ("input_cache_hit_per_1m", "cache_read_per_1m"),
+    ("cache_write_per_1m",),
+)
+
+_yaml_cache: dict[Path, tuple[float, dict]] = {}
 _pricing_cache: dict | None = None
-_pricing_mtime: float = 0.0
-_pricing_source: Path | None = None
+_pricing_key: tuple | None = None
+_user_entry_ids: set[int] = set()
+_user_fx_rates: dict = {}
 _unresolved_logged: set[str] = set()
 
 
+def _read_yaml(path: Path) -> tuple[float, dict]:
+    """Return ``(mtime, data)``; re-reads on mtime change. Missing → ``(0, {})``."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return 0.0, {}
+    hit = _yaml_cache.get(path)
+    if hit is not None and hit[0] == mtime:
+        return hit
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    _yaml_cache[path] = (mtime, data)
+    return mtime, data
+
+
+def _iter_model_entries(cfg: dict):
+    for k, v in cfg.items():
+        if k == "models" and isinstance(v, dict):
+            yield from (e for e in v.values() if isinstance(e, dict))
+        elif isinstance(v, dict):
+            yield v
+
+
 def _load_pricing() -> dict:
-    """Load pricing YAML. Re-reads on mtime change so edits take effect without restart."""
-    global _pricing_cache, _pricing_mtime, _pricing_source
+    """Builtin pricing table overlaid by the user's ``pricing.yaml``.
 
-    target: Path | None = None
-    for p in (_USER_PRICING, _BUILTIN_PRICING):
-        if p.exists():
-            target = p
-            break
+    The user file no longer has to be a full copy: top-level settings
+    override the builtin ones, user provider namespaces are searched first,
+    and a same-named namespace is merged model by model. Entries that come
+    from the user file are recorded in ``_user_entry_ids`` so they always win
+    over models.dev.
+    """
+    global _pricing_cache, _pricing_key, _user_entry_ids, _user_fx_rates
 
-    if target is None:
-        _pricing_cache = {}
+    user_mtime, user = _read_yaml(_USER_PRICING)
+    builtin_mtime, builtin = _read_yaml(_BUILTIN_PRICING)
+    key = (user_mtime, builtin_mtime)
+    if _pricing_cache is not None and _pricing_key == key:
         return _pricing_cache
 
-    try:
-        mtime = target.stat().st_mtime
-    except OSError:
-        mtime = 0.0
+    merged = {k: v for k, v in builtin.items() if k != "providers"}
+    merged.update({k: v for k, v in user.items() if k != "providers"})
 
-    if (_pricing_cache is not None
-            and _pricing_source == target
-            and _pricing_mtime == mtime):
-        return _pricing_cache
+    user_providers = user.get("providers") or {}
+    providers: dict = {}
+    for name, cfg in user_providers.items():
+        providers[name] = cfg
+    for name, cfg in (builtin.get("providers") or {}).items():
+        if name not in providers:
+            providers[name] = cfg
+        elif isinstance(cfg, dict) and isinstance(providers[name], dict):
+            providers[name] = {**cfg, **providers[name]}
+    merged["providers"] = providers
 
-    try:
-        with open(target, "r", encoding="utf-8") as f:
-            _pricing_cache = yaml.safe_load(f) or {}
-    except OSError:
-        _pricing_cache = {}
-    _pricing_mtime = mtime
-    _pricing_source = target
+    user_ids = {id(e) for cfg in user_providers.values() if isinstance(cfg, dict)
+                for e in _iter_model_entries(cfg)}
+    user_ids |= {id(v) for k, v in user.items()
+                 if k not in ("providers", "fx_rates") and isinstance(v, dict)}
+
+    _user_entry_ids = user_ids
+    _user_fx_rates = user.get("fx_rates") or {}
+    _pricing_cache = merged
+    _pricing_key = key
     return _pricing_cache
+
+
+def _is_pinned(entry: dict) -> bool:
+    return id(entry) in _user_entry_ids or any(k in entry for k in _PINNED_KEYS)
 
 
 def _debug_unresolved(model_id: str) -> None:
@@ -239,41 +297,36 @@ def _select_tide_block(price: dict, tide: dict, at_ts: str | None) -> dict:
     return off_peak
 
 
-def _resolve_price(
-    model_id: str,
-    display_currency: str,
-    base_currency: str,
-    at_ts: str | None = None,
-) -> tuple[dict, str, str]:
-    """Return ``(price_dict, price_currency, target_display_currency)``.
+def _select_tier_block(price: dict, prompt_tokens: int | None) -> dict:
+    """Apply context-length tier pricing for one call.
 
-    The three return values:
-
-    * ``price_dict``        — the resolved price block (after the
-      ``prices``-map selection rules below).
-    * ``price_currency``    — the ISO code of the currency the price is
-      actually denominated in. May differ from the model's declared
-      ``currency`` if that currency's block is missing from ``prices``
-      and we fell back to another block.
-    * ``target_display_currency`` — the currency to render this model's
-      cost in:
-
-      - The model's declared ``currency`` field, **if present** — this is
-        the explicit "I am a CNY-native model" signal. Per-model native
-        display is the right answer for that model.
-      - ``display_currency`` otherwise — the user has no per-model
-        preference signal, so the cost is rendered in whatever display
-        currency they configured.
-
-    The split between ``price_currency`` and ``target_display_currency``
-    matters when a model declares ``currency: CNY`` but only ships a
-    ``prices:`` block in ``USD``: the cost is computed in USD (the only
-    authoritative block) and FX-converted into CNY for display, so the
-    user still sees ¥ without us inventing a fake CNY price.
+    ``price.tiers`` is a list of ``{above: N, <rates>}``; the tier with the
+    largest ``N`` below the call's prompt size (input + cache_read +
+    cache_write) overrides the base rates. Without a per-call prompt size
+    (aggregate pricing) the base tier is used.
     """
-    pricing = _load_pricing()
-    entry = _find_model_entry(model_id, pricing)
+    tiers = price.get("tiers") if isinstance(price, dict) else None
+    if not tiers or not prompt_tokens:
+        return price
+    chosen = None
+    for t in tiers:
+        if not isinstance(t, dict) or not isinstance(t.get("above"), (int, float)):
+            continue
+        if prompt_tokens > t["above"] and (chosen is None or t["above"] > chosen["above"]):
+            chosen = t
+    if chosen is None:
+        return price
+    merged = {k: v for k, v in price.items() if k != "tiers"}
+    for group in _PRICE_KEY_GROUPS:
+        if any(k in chosen for k in group):
+            for k in group:
+                merged.pop(k, None)
+    merged.update({k: v for k, v in chosen.items() if k != "above"})
+    return merged
 
+
+def _candidate_ids(model_id: str) -> list[str]:
+    """Lookup keys for ``model_id``, most specific first."""
     # Strip provider-specific cache-variant suffixes like ``[1m]``,
     # ``[1M]``, or even doubled ``[1M][1m]`` (the suffix is appended
     # case-insensitively, and some APIs append it twice when the model
@@ -323,16 +376,77 @@ def _resolve_price(
         while len(parts) > 1:
             parts.pop()
             candidates.append("-".join(parts))
+    return candidates
 
-    for cand in candidates:
-        e = _find_model_entry(cand, pricing)
-        if e is not None:
-            entry = e
+
+def _resolve_price(
+    model_id: str,
+    display_currency: str,
+    base_currency: str,
+    at_ts: str | None = None,
+    prompt_tokens: int | None = None,
+) -> tuple[dict, str, str]:
+    """Return ``(price_dict, price_currency, target_display_currency)``.
+
+    The three return values:
+
+    * ``price_dict``        — the resolved price block (after the
+      ``prices``-map selection rules below).
+    * ``price_currency``    — the ISO code of the currency the price is
+      actually denominated in. May differ from the model's declared
+      ``currency`` if that currency's block is missing from ``prices``
+      and we fell back to another block.
+    * ``target_display_currency`` — the currency to render this model's
+      cost in:
+
+      - The model's declared ``currency`` field, **if present** — this is
+        the explicit "I am a CNY-native model" signal. Per-model native
+        display is the right answer for that model.
+      - ``display_currency`` otherwise — the user has no per-model
+        preference signal, so the cost is rendered in whatever display
+        currency they configured.
+
+    The split between ``price_currency`` and ``target_display_currency``
+    matters when a model declares ``currency: CNY`` but only ships a
+    ``prices:`` block in ``USD``: the cost is computed in USD (the only
+    authoritative block) and FX-converted into CNY for display, so the
+    user still sees ¥ without us inventing a fake CNY price.
+
+    Source precedence, applied per candidate id (most specific first, so
+    a new ``claude-opus-5-5`` found on models.dev is not shadowed by the
+    older ``claude-opus-5`` YAML entry that prefix stripping reaches):
+
+      1. pinned YAML entry — from the user file, or carrying
+         ``currency`` / ``prices`` / ``tide`` / ``tiers``
+      2. models.dev catalog (USD, refreshed daily)
+      3. plain builtin YAML entry (offline snapshot)
+
+    ``prompt_tokens`` (this call's input + cache_read + cache_write)
+    selects the context-length tier, if the model has ``tiers``.
+    """
+    pricing = _load_pricing()
+    entry = None
+    remote = False
+    for cand in _candidate_ids(model_id):
+        local = _find_model_entry(cand, pricing)
+        if local is not None and _is_pinned(local):
+            entry = local
+            break
+        found = catalog.lookup(cand)
+        if found is not None:
+            entry, remote = found, True
+            break
+        if local is not None:
+            entry = local
             break
 
     if entry is None:
         _debug_unresolved(model_id)
         return _DEFAULT_PRICING, base_currency, base_currency
+
+    if remote:
+        # models.dev 一律 USD 标价，与 base_currency 设置无关
+        return _select_tier_block(entry, prompt_tokens), "USD", display_currency
 
     has_explicit_currency = "currency" in entry
     model_currency = (entry.get("currency") or base_currency).upper()
@@ -342,6 +456,7 @@ def _resolve_price(
     tide = entry.get("tide")
     if isinstance(tide, dict):
         price = _select_tide_block(price, tide, at_ts)
+    price = _select_tier_block(price, prompt_tokens)
     target = model_currency if has_explicit_currency else display_currency
     return price, price_currency, target
 
@@ -404,6 +519,10 @@ def _currency_settings() -> tuple[str, str, dict]:
       2. ``display_currency`` in YAML
       3. ``default_currency`` in YAML (legacy alias)
       4. ``base_currency`` itself
+
+    FX rate precedence (per currency, highest first): ``fx_rates`` in the
+    user's ``pricing.yaml`` → daily-fetched rates (:mod:`ccs.catalog`) →
+    builtin ``fx_rates`` snapshot.
     """
     pricing = _load_pricing()
     base = (pricing.get("base_currency") or "USD").upper()
@@ -413,7 +532,9 @@ def _currency_settings() -> tuple[str, str, dict]:
                or pricing.get("default_currency")
                or base).upper()
 
-    fx_rates = pricing.get("fx_rates") or {}
+    fx_rates = dict(pricing.get("fx_rates") or {})
+    fx_rates.update(catalog.fx_rates() or {})
+    fx_rates.update(_user_fx_rates)
     return base, display, fx_rates
 
 
@@ -474,6 +595,11 @@ def _model_cost_in_native(price: dict, usage: dict) -> float:
     return cost
 
 
+def _prompt_tokens(usage: dict) -> int:
+    """Prompt size of one call — what context-length tiers are keyed on."""
+    return (usage.get("input", 0) or 0) + (usage.get("cache_read", 0) or 0) + (usage.get("cache_write", 0) or 0)
+
+
 def fmt_cost_multi(
     model_breakdown: dict,
     primary_model_id: str | None = None,
@@ -509,7 +635,9 @@ def fmt_cost_multi(
     accurate path — an aggregate breakdown has no time information, so
     a mixed peak/off-peak session would otherwise be priced entirely at
     the current hour. When ``model_calls`` is given it takes precedence
-    over ``model_breakdown`` for the models it covers.
+    over ``model_breakdown`` for the models it covers. The same per-call
+    path is what makes context-length tiers (``tiers``) exact: each call is
+    priced at the tier its own prompt size falls into.
     """
     if not model_breakdown and not model_calls:
         return "-"
@@ -521,8 +649,9 @@ def fmt_cost_multi(
     # whether aggregation can be done in one currency or must FX-mix.
     by_target: dict[str, float] = {}
 
-    def _acc_cost(model_id: str, usage: dict, at_ts: str | None) -> None:
-        price, price_currency, target = _resolve_price(model_id, display, base, at_ts=at_ts)
+    def _acc_cost(model_id: str, usage: dict, at_ts: str | None, prompt: int | None) -> None:
+        price, price_currency, target = _resolve_price(
+            model_id, display, base, at_ts=at_ts, prompt_tokens=prompt)
         cost = _model_cost_in_native(price, usage)
         if price_currency != target:
             cost = _fx_convert(cost, price_currency, target, fx_rates)
@@ -531,10 +660,10 @@ def fmt_cost_multi(
     if model_calls:
         for model_id, calls in model_calls.items():
             for ts, usage in calls:
-                _acc_cost(model_id, usage, ts)
+                _acc_cost(model_id, usage, ts, _prompt_tokens(usage))
     else:
         for model_id, usage in model_breakdown.items():
-            _acc_cost(model_id, usage, None)
+            _acc_cost(model_id, usage, None, None)
 
     if not by_target:
         return "-"
@@ -584,13 +713,15 @@ def fmt_last_cost(
         user's ``display_currency`` (FX from base if they differ).
     """
     base, display, fx_rates = _currency_settings()
-    price, price_currency, target = _resolve_price(model_id, display, base)
-    cost_native = _model_cost_in_native(price, {
+    usage = {
         "input": per_call_input,
         "output": per_call_output,
         "cache_read": per_call_cache_read,
         "cache_write": per_call_cache_write,
-    })
+    }
+    price, price_currency, target = _resolve_price(
+        model_id, display, base, prompt_tokens=_prompt_tokens(usage))
+    cost_native = _model_cost_in_native(price, usage)
     if price_currency != target:
         cost = _fx_convert(cost_native, price_currency, target, fx_rates)
     else:

@@ -53,10 +53,11 @@ Codex statusline tick ──stdin JSON──→ ccs-statusline
 - **`statusline.py`** — 编排管道：解析 stdin JSON → `get_session_metrics()` 解析 JSONL transcript → `update_session_tokens()` 写入 SQLite → `get_all_totals()` / `get_model_breakdown()` 读取 → 成本计算 → 渲染。保留 stdin `current_usage` 用于 LAST cost 和 NEXT replay 估算。
 - **`tracker.py`** — 将 `ccs-tracker --event <stop|tool|subagent-start|subagent-stop>` 分派到 db.py 写入。退出码始终为 0（即使出现异常）以防止 hook 错误。
 - **`db.py`** — 位于 `~/.Codex/statusline/usage.db` 的 SQLite（WAL 模式）。四张表：`sessions`（会话元数据、聚合令牌/轮次/子代理计数器）、`model_usage`（按模型分解的 token 追踪）、`tool_calls`、`subagent_events`。`update_session_tokens()` 和 `update_model_usage()` 直接写入 JSONL 解析值，无需 snapshot diff。
-- **`cost.py`** — 多提供商定价。解析链：`~/.Codex/statusline/pricing.yaml` → 内置 `pricing.yaml` → 后备默认值。模型 ID 匹配：先精确查找，去除 `[1m]` 后缀，逐段剥离尾部版本号。`fmt_cost_multi()` 按模型分别定价加总；`fmt_last_cost()` 处理 per-call 成本（含 Anthropic cache_write）。
+- **`cost.py`** — 多提供商定价。用户 `pricing.yaml` 叠加合并到内置表之上；对每个候选 id（由具体到泛化）依次查：钉住的 YAML 条目（来自用户文件，或带 `currency`/`prices`/`tide`/`tiers`）→ models.dev 目录（`catalog.lookup`）→ 普通内置条目 → 后备默认值。`tiers` 按每次调用的 prompt 大小（input+cache_read+cache_write）选档。汇率：用户 `fx_rates` → 每日拉取 → 内置快照。模型 ID 匹配：先精确查找，去除 `[1m]` 后缀，逐段剥离尾部版本号。`fmt_cost_multi()` 按模型分别定价加总；`fmt_last_cost()` 处理 per-call 成本（含 Anthropic cache_write）。
 - **`transcript.py`** — JSONL transcript 解析核心。`get_session_metrics()`：过滤含 `message.usage` 的条目，连续去重（user 消息打断链），按 `message.model` 分组统计，聚合子代理 `agent-*.jsonl`，检测 `compact_boundary` 压缩标记。`estimate_next_replay()`：基于转录本估算下一轮重播令牌（保留用于 NEXT 显示）。
 - **`renderer.py`** — 纯 ANSI 渲染。64 级健康渐变色（绿→黄→橙→红），用于 CTX 压力条和 CACHE 命中率。双行输出，`│` 分隔符，粗体/暗色着色。CACHE 百分比 = `cache_read / (input + cache_read)`（标准缓存命中率 0-100%）。TURNS 显示 `cN` 标记压缩次数。第二行尾部渲染官方用量段（`_fmt_official_usage`）：5H/7D 滚动窗口 + MO 月度预算（USD 显示 `$used/$limit`，credits 显示数量）。
 - **`usage.py`** — Codex 官方订阅用量客户端。调用驱动 `/usage` 命令的 OAuth 端点 `GET /api/oauth/usage`（必带 `User-Agent: Codex/<ver>`，否则落入严格 429 桶）。读 token 顺序：`CLAUDE_CODE_OAUTH_TOKEN` → `~/.Codex/.credentials.json`（`claudeAiOauth.accessToken`）→ macOS 钥匙串。`normalize()` 归一化两种订阅形态：**美元预算型**（enterprise，滚动窗口为 null，`extra_usage.currency==USD`）与 **额度窗口型**（team/pro/max，`five_hour`/`seven_day` 利用率 + credits）。
+- **`catalog.py`** — models.dev 价格目录与每日汇率。`api.json` 压缩为 `{model_id_casefold: price_block}` 存 `~/.claude/statusline/models_dev.json`（仅取模型原厂目录，忽略转售与订阅目录），汇率存 `fx_rates.json`。状态行每 tick 仅 stat 文件，过期（24h）时派生脱离的 `python -m ccs.catalog` 后台进程刷新（ETag 304 省流量；lock 文件兼作 1h 退避），绝不阻塞渲染。
 - **`util.py`** — 从 stdin 读取 JSON 的共享辅助函数。
 
 ### 关键行为
@@ -77,7 +78,9 @@ Codex statusline tick ──stdin JSON──→ ccs-statusline
 
 安装通过 `install.sh` 进行，它创建 `~/.Codex/statusline/venv`，pip 安装包，并输出用于合并到 `~/.Codex/settings.json` 的 hook + statusLine JSON。请参阅 `examples/settings.json` 获取完整配置。
 
-定价覆盖位于 `~/.Codex/statusline/pricing.yaml`（如果缺失，则使用内置表）。设置 `CCS_DEBUG=1` 以将原始 hook JSON 写入 `~/.Codex/statusline/debug.log`。
+定价覆盖位于 `~/.Codex/statusline/pricing.yaml`（叠加合并到内置表之上，只写需要覆盖的条目即可）。设置 `CCS_DEBUG=1` 以将原始 hook JSON 写入 `~/.Codex/statusline/debug.log`。
+
+价格目录相关环境变量：`CCS_PRICING_API=0` 关闭 models.dev 价格与汇率（只用 YAML）。手动刷新：`python -m ccs.catalog --force`。
 
 官方用量相关环境变量：`CCS_USAGE_API=0` 关闭 `/api/oauth/usage` 网络请求（仅用 stdin 的 5h/7d 窗口）；`CCS_USAGE_TTL` 调整缓存刷新间隔（秒，最低 180）；`CLAUDE_CODE_OAUTH_TOKEN` 显式提供 OAuth token（否则自动从凭证文件/钥匙串读取）。
 
