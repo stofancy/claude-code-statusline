@@ -197,9 +197,9 @@ providers:
       output_per_1m: 4.00
 
   # ─────────────────────────────────────────────────────────────────────────
-  # DeepSeek — published with official CNY prices on api-docs.deepseek.com
-  # (zh-cn/quick_start/pricing). USD equivalents use the implied exchange rate
-  # from DeepSeek's own page (~6.9 CNY/USD, not the fx_rates table).
+  # DeepSeek — 官方价页只有人民币标价（元/百万 tokens），峰谷两档也都是人民币，
+  # 所以这里只写 `prices.CNY`；其它币种显示时按 fx_rates 折算，不重复抄一套
+  # 官方英文页的美元数字（CNY 块优先，那样写进去也是不可达的死数据）。
   #
   # 峰谷（潮汐）定价，官方自 2026-08-16 16:00 UTC（北京 2026-08-17 00:00）生效：
   #   高峰时段 = 01:00–04:00 与 06:00–10:00 UTC（北京 9:00–12:00、14:00–18:00），
@@ -221,18 +221,9 @@ providers:
             input_per_1m: 4.5
             input_cache_hit_per_1m: 0.15
             output_per_1m: 13.5
-        USD:
-          peak:
-            input_per_1m: 1.32
-            input_cache_hit_per_1m: 0.044
-            output_per_1m: 3.96
-          off_peak:
-            input_per_1m: 0.66
-            input_cache_hit_per_1m: 0.022
-            output_per_1m: 1.98
 
-    # 官方当前模型名（模型版本 DeepSeek-V4.1-Flash-1017）。官方页同时给出
-    # CNY 与 USD 两套标价（各自标定，非汇率换算），故两套都按原文录入。
+    # 官方当前模型名（模型版本 DeepSeek-V4.1-Flash-1017）。峰谷两档均为
+    # 人民币价：高峰 输入 2 / 命中 0.04 / 输出 8，空闲为其一半。
     deepseek-flash:
       tide:
         peak_hours_utc: [[1, 4], [6, 10]]
@@ -246,15 +237,6 @@ providers:
             input_per_1m: 1.0
             input_cache_hit_per_1m: 0.02
             output_per_1m: 4.0
-        USD:
-          peak:
-            input_per_1m: 0.30
-            input_cache_hit_per_1m: 0.006
-            output_per_1m: 1.20
-          off_peak:
-            input_per_1m: 0.15
-            input_cache_hit_per_1m: 0.003
-            output_per_1m: 0.60
 
     # 旧名：官方注明仍可调用，但模型已下线，请求由 deepseek-flash 承接、按 Flash 价计费。
     deepseek-v4-flash:
@@ -270,18 +252,10 @@ providers:
             input_per_1m: 1.0
             input_cache_hit_per_1m: 0.02
             output_per_1m: 4.0
-        USD:
-          peak:
-            input_per_1m: 0.30
-            input_cache_hit_per_1m: 0.006
-            output_per_1m: 1.20
-          off_peak:
-            input_per_1m: 0.15
-            input_cache_hit_per_1m: 0.003
-            output_per_1m: 0.60
 
     # Legacy names — 官方价页自 2026-10-28 起已不列这两个模型（deepseek-chat /
-    # deepseek-r1），下列数值为最后已知价，仅用于历史 transcript 计价。
+    # deepseek-r1），下列数值为最后已知的美元价（flat 字典 => 按 base_currency
+    # 计价，显示时折算），仅用于历史 transcript 计价。
     deepseek-chat:
       input_per_1m: 0.279
       input_cache_hit_per_1m: 0.0696
@@ -399,8 +373,8 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   # Xiaomi MiMo — list price published in CNY (元) per 1M tokens. Authored
   # here in CNY under `prices.CNY`, so CNY is used for computing the cost
-  # (CNY-first rule). USD equivalents are reproduced under `prices.USD`
-  # as the fallback for models without a CNY block.
+  # (CNY-first rule). 只写人民币块：官方口播就是元/百万 tokens，美元数字要么
+  # 由 fx_rates 折算，要么由用户自己的 pricing 覆盖文件提供。
   # https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
   # 2026-10-28 复核：官方定价页只剩 V2.6 系列（v2.6-pro / v2.6-flash /
   # v2.6-pro-ultraspeed）；v2.5-pro 与 v2.5 已于 2026-10-21 10:00 下线，
@@ -415,10 +389,6 @@ providers:
           input_per_1m: 3.00
           input_cache_hit_per_1m: 0.025
           output_per_1m: 6.00
-        USD:
-          input_per_1m: 0.435
-          input_cache_hit_per_1m: 0.0036
-          output_per_1m: 0.87
 
     mimo-v2.6-flash:
       prices:
@@ -426,10 +396,6 @@ providers:
           input_per_1m: 1.00
           input_cache_hit_per_1m: 0.02
           output_per_1m: 2.00
-        USD:
-          input_per_1m: 0.14
-          input_cache_hit_per_1m: 0.0028
-          output_per_1m: 0.28
 
     mimo-v2.6-pro-ultraspeed:
       prices:
@@ -437,10 +403,6 @@ providers:
           input_per_1m: 30.00
           input_cache_hit_per_1m: 0.25
           output_per_1m: 60.00
-        USD:
-          input_per_1m: 4.35
-          input_cache_hit_per_1m: 0.036
-          output_per_1m: 8.70
 
     # ── 以下为已下线/已无价格行的历史型号，数值为最后已知价 ──
     mimo-v2.5-pro:
@@ -449,10 +411,6 @@ providers:
           input_per_1m: 3.00
           input_cache_hit_per_1m: 0.025
           output_per_1m: 6.00
-        USD:
-          input_per_1m: 0.435
-          input_cache_hit_per_1m: 0.0036
-          output_per_1m: 0.87
 
     mimo-v2.5:
       prices:
@@ -460,10 +418,6 @@ providers:
           input_per_1m: 1.00
           input_cache_hit_per_1m: 0.02
           output_per_1m: 2.00
-        USD:
-          input_per_1m: 0.14
-          input_cache_hit_per_1m: 0.0028
-          output_per_1m: 0.28
 
     mimo-v2-pro:
       prices:
@@ -471,10 +425,6 @@ providers:
           input_per_1m: 3.00
           input_cache_hit_per_1m: 0.025
           output_per_1m: 6.00
-        USD:
-          input_per_1m: 0.435
-          input_cache_hit_per_1m: 0.0036
-          output_per_1m: 0.87
 
     mimo-v2-omni:
       prices:
@@ -482,10 +432,6 @@ providers:
           input_per_1m: 1.00
           input_cache_hit_per_1m: 0.02
           output_per_1m: 2.00
-        USD:
-          input_per_1m: 0.14
-          input_cache_hit_per_1m: 0.0028
-          output_per_1m: 0.28
 
     mimo-v2-flash:
       prices:
@@ -493,15 +439,11 @@ providers:
           input_per_1m: 0.70
           input_cache_hit_per_1m: 0.07
           output_per_1m: 2.10
-        USD:
-          input_per_1m: 0.10
-          input_cache_hit_per_1m: 0.01
-          output_per_1m: 0.30
 
   # ─────────────────────────────────────────────────────────────────────────
   # MiniMax — list price published in CNY (元) per 1M tokens, recorded here
-  # under `prices.CNY` so the CNY-first rule bills in ¥ as published. USD
-  # values reproduce the page's own USD table where it publishes one.
+  # under `prices.CNY` so the CNY-first rule bills in ¥ as published. 官方价
+  # 页只有人民币一栏，故不再抄一份美元数字。
   # Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
   #
   # 2026-10-28 复核：官方按量计费页现在只剩 MiniMax-M3 与 MiniMax-M3.1-Flash。
@@ -522,11 +464,6 @@ providers:
           input_cache_hit_per_1m: 0.21
           output_per_1m: 8.40
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.2925
-          input_cache_hit_per_1m: 0.0292
-          output_per_1m: 1.1699
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.1:
       prices:
@@ -535,11 +472,6 @@ providers:
           input_cache_hit_per_1m: 0.21
           output_per_1m: 8.40
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.2925
-          input_cache_hit_per_1m: 0.0292
-          output_per_1m: 1.1699
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.1-HightSpeed:
       prices:
@@ -548,11 +480,6 @@ providers:
           input_cache_hit_per_1m: 0.21
           output_per_1m: 16.80
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.5850
-          input_cache_hit_per_1m: 0.0292
-          output_per_1m: 2.3398
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.5:
       prices:
@@ -561,11 +488,6 @@ providers:
           input_cache_hit_per_1m: 0.21
           output_per_1m: 8.40
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.2925
-          input_cache_hit_per_1m: 0.0292
-          output_per_1m: 1.1699
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.5-HightSpeed:
       prices:
@@ -574,11 +496,6 @@ providers:
           input_cache_hit_per_1m: 0.21
           output_per_1m: 16.80
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.5850
-          input_cache_hit_per_1m: 0.0292
-          output_per_1m: 2.3398
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.7:
       prices:
@@ -587,11 +504,6 @@ providers:
           input_cache_hit_per_1m: 0.42
           output_per_1m: 8.40
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.2925
-          input_cache_hit_per_1m: 0.0585
-          output_per_1m: 1.1699
-          cache_write_per_1m: 0.3656
 
     MiniMax-M2.7-HightSpeed:
       prices:
@@ -600,11 +512,6 @@ providers:
           input_cache_hit_per_1m: 0.42
           output_per_1m: 16.80
           cache_write_per_1m: 2.63
-        USD:
-          input_per_1m: 0.5850
-          input_cache_hit_per_1m: 0.0585
-          output_per_1m: 2.3398
-          cache_write_per_1m: 0.3656
 
     MiniMax-M3:
       prices:
@@ -612,10 +519,6 @@ providers:
           input_per_1m: 2.10
           input_cache_hit_per_1m: 0.42
           output_per_1m: 8.40
-        USD:
-          input_per_1m: 0.2925
-          input_cache_hit_per_1m: 0.0585
-          output_per_1m: 1.1699
       tiers:
         - above: 512000
           input_per_1m: 4.20
@@ -632,7 +535,7 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   # Zhipu BigModel (GLM series) — list price published in CNY (元) per 1M
   # tokens. Authored in CNY under `prices.CNY` so the status line shows ¥
-  # as published. USD equivalents are reproduced under `prices.USD`.
+  # as published. 官方只有人民币标价，故不另存美元数字。
   # Source: https://bigmodel.cn/pricing (verified 2026-06-15)
   #
   # Tiered pricing: GLM-5.x / 4.7 / 4.5-Air charge by input length. We record
@@ -663,10 +566,6 @@ providers:
           input_per_1m: 8.00
           input_cache_hit_per_1m: 2.00
           output_per_1m: 28.00
-        USD:
-          input_per_1m: 1.1142
-          input_cache_hit_per_1m: 0.2786
-          output_per_1m: 3.8997
 
     glm-5.1:
       prices:
@@ -674,10 +573,6 @@ providers:
           input_per_1m: 8.00
           input_cache_hit_per_1m: 2.00
           output_per_1m: 28.00
-        USD:
-          input_per_1m: 1.1142
-          input_cache_hit_per_1m: 0.2786
-          output_per_1m: 3.8997
 
     glm-5-turbo:
       prices:
@@ -685,10 +580,6 @@ providers:
           input_per_1m: 7.00
           input_cache_hit_per_1m: 1.80
           output_per_1m: 26.00
-        USD:
-          input_per_1m: 0.9749
-          input_cache_hit_per_1m: 0.2507
-          output_per_1m: 3.6212
 
     glm-5:
       prices:
@@ -696,10 +587,6 @@ providers:
           input_per_1m: 6.00
           input_cache_hit_per_1m: 1.50
           output_per_1m: 22.00
-        USD:
-          input_per_1m: 0.8357
-          input_cache_hit_per_1m: 0.2089
-          output_per_1m: 3.0641
 
     glm-4.7:
       prices:
@@ -707,10 +594,6 @@ providers:
           input_per_1m: 4.00
           input_cache_hit_per_1m: 0.80
           output_per_1m: 16.00
-        USD:
-          input_per_1m: 0.5571
-          input_cache_hit_per_1m: 0.1114
-          output_per_1m: 2.2284
 
     glm-4.5-air:
       prices:
@@ -718,10 +601,6 @@ providers:
           input_per_1m: 1.20
           input_cache_hit_per_1m: 0.24
           output_per_1m: 8.00
-        USD:
-          input_per_1m: 0.1671
-          input_cache_hit_per_1m: 0.0334
-          output_per_1m: 1.1142
 
     glm-4.7-flashx:
       prices:
@@ -729,10 +608,6 @@ providers:
           input_per_1m: 0.50
           input_cache_hit_per_1m: 0.10
           output_per_1m: 3.00
-        USD:
-          input_per_1m: 0.0696
-          input_cache_hit_per_1m: 0.0139
-          output_per_1m: 0.4178
 
     glm-4.7-flash:
       prices:
@@ -740,10 +615,6 @@ providers:
           input_per_1m: 0.00
           input_cache_hit_per_1m: 0.00
           output_per_1m: 0.00
-        USD:
-          input_per_1m: 0.0
-          input_cache_hit_per_1m: 0.0
-          output_per_1m: 0.0
 
   # ─────────────────────────────────────────────────────────────────────────
   # Moonshot / Kimi — published in USD per 1M tokens.
