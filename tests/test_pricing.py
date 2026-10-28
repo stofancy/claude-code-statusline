@@ -174,6 +174,40 @@ def test_user_entry_shadows_proxy_prefix_match(usd):
     assert last_cost("openrouter/claude-opus-4-8", input=100_000) == "$10.00"
 
 
+# ── 第三方网关的 id 变体：前缀、后缀、版本 ────────────────────────────────
+
+@pytest.mark.parametrize("model_id, expected", [
+    ("glm-5.2", "¥3.80"),                       # 点号形式的键
+    ("zai/glm-5.2", "¥3.80"),                   # 前缀剥离必须保留点号形式，否则落到目录价
+    ("newapi/deepseek-v4-flash-v2", "¥1.21"),   # 前缀 + 版本后缀组合
+    ("deepseek-v4-flash-newapi", "¥1.21"),      # 仅后缀
+    ("openrouter/deepseek/deepseek-v4-flash", "¥1.21"),
+    ("openrouter/deepseek/deepseek-chat-v3", "¥1.05"),  # 前缀 + 版本，旧链会落到默认价
+    ("newapi/deepseek_v4_flash", "¥1.21"),      # 下划线拼写：仅 token 模糊匹配可达
+    ("newapi/deepseek.v4.flash", "¥1.21"),      # 点号分隔：同上
+])
+def test_variant_ids_match_base_model(model_id, expected):
+    assert last_cost(model_id, **U) == expected
+
+
+def test_variant_version_conflict_uses_default_pricing(usd):
+    # 表里只有 v4-flash：v3 请求不得借用 v4 的价格
+    assert last_cost("newapi/deepseek-v3-flash", **U) == "$0.510"
+
+
+def test_patterns_rule_overrides_exact_chain(usd):
+    write_user_pricing(
+        "providers:\n  mine:\n    my-cheap-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
+        "patterns:\n"
+        "  - match: \"*deepseek-v4-flash*\"\n"
+        "    use: my-cheap-flash\n"
+    )
+    # `*` 跨 `/`，因此带网关前缀的 id 也命中；规则优先于精确链
+    assert last_cost("newapi/deepseek-v4-flash-v2", input=100_000) == "$10.00"
+    assert last_cost("deepseek-v4-flash", input=100_000) == "$10.00"
+    assert last_cost("deepseek-v4-pro", input=100_000) == "¥0.900"  # 未命中规则照常走表
+
+
 @pytest.mark.parametrize("fetched, user_pin, expected", [
     (None, None, "¥21.90"),   # 内置快照 7.18
     (6.5, None, "¥19.82"),    # 每日拉取的汇率

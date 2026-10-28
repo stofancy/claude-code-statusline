@@ -195,6 +195,8 @@ command = '"/path/to/python" -m ccs.codex_statusline'
 
 内置定价表 `src/ccs/pricing.yaml` 保存 models.dev 无法表达的信息——人民币原生价、DeepSeek 峰谷价、自定义分档——这些条目优先；普通美元条目仅作离线兜底。`~/.claude/statusline/pricing.yaml` 叠加在内置表之上且始终优先（只写部分条目即可）。按上下文长度分档（`tiers: [{above: N, ...}]`）逐次调用精确计价。
 
+第三方网关的模型 id 由三层匹配落到表内键：`pricing.yaml` 的 `patterns:` glob 规则（显式覆盖，首个命中生效）→ 精确链（任意组合地剥离 `[1m]` 缓存后缀、点号版本、网关前缀与变体/版本后缀，如 `newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`）→ token 模糊匹配（要求版本 token 一致，`v3` 请求不会借用 `v4` 的价格）。三者都不命中的 id 用默认价，并在 `CCS_DEBUG=1` 时写入 debug 日志。
+
 所有价格均以 **CNY（¥）** 每百万 token 计。
 
 | 提供商 | 模型 | 输入 | 缓存命中 | 缓存写入 | 输出 |

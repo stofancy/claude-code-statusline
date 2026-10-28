@@ -103,12 +103,21 @@ def lookup(model_id: str) -> dict | None:
     """Return the models.dev price block for ``model_id`` (case-insensitive)."""
     if not model_id or not _enabled():
         return None
-    data = _load_json(_MODELS_PATH)
-    models = data.get("models") if data else None
-    if not isinstance(models, dict):
-        return None
-    block = models.get(model_id.casefold())
+    block = models().get(model_id.casefold())
     return block if isinstance(block, dict) else None
+
+
+def models() -> dict[str, dict]:
+    """Every compacted models.dev price block, keyed by casefolded model id.
+
+    Empty when the API is disabled or the cache is missing. Used by the
+    fuzzy matcher, which has to rank all known ids against an unknown one.
+    """
+    if not _enabled():
+        return {}
+    data = _load_json(_MODELS_PATH)
+    found = data.get("models") if data else None
+    return found if isinstance(found, dict) else {}
 
 
 def fx_rates() -> dict | None:

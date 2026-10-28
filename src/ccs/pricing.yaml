@@ -41,6 +41,27 @@
 #
 # Context-length tiers: `tiers: [{above: N, <rates>}]` — a call whose prompt
 # (input + cache_read + cache_write) exceeds N tokens is billed at that tier.
+#
+# Model id matching (ccs/cost.py)
+# ------------------------------
+# Gateways spell the same model many ways (`newapi/deepseek-flash`,
+# `deepseek-flash-newapi`, `deepseek-flash[1m]`, `claude-opus-4.8`). Lookup
+# applies three layers in order:
+#   1. `patterns:` rules (below) — explicit override, first glob wins;
+#   2. exact chain: `[1m]` stripped, dot versions dashed, proxy prefixes
+#      (`newapi/`, `openrouter/vendor/`) and trailing variant/version
+#      suffixes (`-v2`, `-newapi`, `-20250714`) stripped in any combination;
+#   3. token fuzzy match: the table key's tokens must appear in the id in
+#      order, most specific key wins, and a key carrying a different version
+#      token (`v3` vs `v4`) is rejected so generations never cross-price.
+# Unknown ids fall back to the default block and log under `CCS_DEBUG=1`.
+#
+# `patterns:` maps id shapes onto an existing key (last resort for gateways
+# whose naming no rule reaches; `*` also crosses `/`):
+#
+#   patterns:
+#     - match: "*deepseek-v4-flash*"   # case-insensitive glob
+#       use: deepseek-v4-flash         # any key already in this table
 
 base_currency: USD
 display_currency: CNY

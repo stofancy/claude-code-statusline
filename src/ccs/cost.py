@@ -56,6 +56,7 @@ Why split display from price currency?
 import os
 import re
 from datetime import datetime, timezone
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import yaml
@@ -105,6 +106,22 @@ _CURRENCY_SYMBOLS = {
 
 _DEBUG_LOG = Path.home() / ".claude" / "statusline" / "debug.log"
 
+# 模型 id 的模糊匹配把它切成 token 再比较：``newapi/deepseek-v4-flash-v2``
+# → (newapi, deepseek, v4, flash, v2)。分隔符里包含 ``.`` 与 ``_``，是因为
+# 同一版本号在不同来源写成 ``4.8`` / ``4-8`` / ``4_8`` 都有实测例子。
+_TOKEN_SPLIT_RE = re.compile(r"[/\-_.\s]+")
+
+# 「版本 token」= 纯数字及其带 v 前缀/点号的写法（``4``、``v4``、``3.2``、
+# ``20250714``）。版本 token 在模糊匹配里是关键 token：两侧都有且不相交时
+# 视为不同代模型，拒绝匹配（否则 ``deepseek-v4-flash`` 会吃到 v3 的价）。
+_VERSION_TOKEN_RE = re.compile(r"v?\d+(?:[._]\d+)*", re.IGNORECASE)
+
+# pricing.yaml 的顶层配置键，不是模型条目，模糊匹配枚举时要跳过。
+_SETTING_KEYS = frozenset({
+    "providers", "patterns", "fx_rates",
+    "base_currency", "display_currency", "default_currency",
+})
+
 # 带这些键的 YAML 条目表达了 models.dev 无法表达的信息（原生币种、峰谷、
 # 自定义分档），同一候选 id 下优先于 models.dev。
 _PINNED_KEYS = ("currency", "prices", "tide", "tiers")
@@ -124,6 +141,7 @@ _pricing_key: tuple | None = None
 _user_entry_ids: set[int] = set()
 _user_fx_rates: dict = {}
 _unresolved_logged: set[str] = set()
+_matched_logged: set[str] = set()
 
 
 def _read_yaml(path: Path) -> tuple[float, dict]:
@@ -259,6 +277,150 @@ def _find_model_entry(model_id: str, pricing: dict) -> dict | None:
     return None
 
 
+def _debug_match(model_id: str, matched: str, how: str) -> None:
+    """Log a non-exact resolution once per process when CCS_DEBUG=1."""
+    if os.getenv("CCS_DEBUG") != "1":
+        return
+    tag = f"{how}:{model_id}"
+    if tag in _matched_logged:
+        return
+    _matched_logged.add(tag)
+    try:
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[cost] {how} match: {model_id} -> {matched}\n")
+    except OSError:
+        pass
+
+
+def _tokens(model_id: str) -> tuple[str, ...]:
+    return tuple(t for t in _TOKEN_SPLIT_RE.split(model_id.casefold()) if t)
+
+
+def _version_tokens(tokens: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(t for t in tokens if _VERSION_TOKEN_RE.fullmatch(t))
+
+
+def _is_subsequence(needle: tuple[str, ...], haystack: tuple[str, ...]) -> bool:
+    """True when ``needle`` appears in ``haystack`` in order (gaps allowed)."""
+    it = iter(haystack)
+    return all(tok in it for tok in needle)
+
+
+def _named_entries(pricing: dict):
+    """Yield ``(key, entry, tier)`` for every priceable id, tier 0 = pinned.
+
+    Tier ranks a match inside one fuzzy score band: pinned YAML (0) beats the
+    models.dev catalog (1), which beats a plain offline YAML entry (2) — the
+    same precedence the exact chain uses per candidate id.
+    """
+    providers = pricing.get("providers") or {}
+    for cfg in providers.values():
+        if not isinstance(cfg, dict):
+            continue
+        for k, v in cfg.items():
+            if k != "models" and isinstance(v, dict):
+                yield k, v, 0 if _is_pinned(v) else 2
+        models = cfg.get("models")
+        if isinstance(models, dict):
+            for k, v in models.items():
+                if isinstance(v, dict):
+                    yield k, v, 0 if _is_pinned(v) else 2
+    for k, v in pricing.items():
+        if k not in _SETTING_KEYS and isinstance(v, dict):
+            yield k, v, 0 if _is_pinned(v) else 2
+    for k, v in catalog.models().items():
+        yield k, v, 1
+
+
+def _exact_chain(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
+    """Resolve via generated candidate ids (verbatim, prefix/suffix-stripped)."""
+    for cand in _candidate_ids(model_id):
+        local = _find_model_entry(cand, pricing)
+        if local is not None and _is_pinned(local):
+            return local, False
+        found = catalog.lookup(cand)
+        if found is not None:
+            return found, True
+        if local is not None:
+            return local, False
+    return None
+
+
+def _pattern_match(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
+    """User-declared ``patterns:`` rules — first glob that matches wins.
+
+    Rule shape (pricing.yaml): ``- match: "*/deepseek-flash*"`` /
+    ``use: deepseek-v4-flash``. ``*`` also crosses ``/`` because ids on
+    gateway proxies embed the vendor path (``newapi/deepseek-flash``). The
+    ``use`` target goes through the normal exact chain, so it may name any
+    key already in the table.
+    """
+    rules = pricing.get("patterns")
+    if not isinstance(rules, list):
+        return None
+    target = model_id.casefold()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        pattern, use = rule.get("match"), rule.get("use")
+        if not isinstance(pattern, str) or not isinstance(use, str):
+            continue
+        if not fnmatchcase(target, pattern.casefold()):
+            continue
+        hit = _exact_chain(use, pricing)
+        if hit is not None:
+            _debug_match(model_id, use, "pattern")
+            return hit
+    return None
+
+
+def _fuzzy_match(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
+    """Token-level match: the table key's tokens must appear in the id in order.
+
+    Handles vendor prefixes, reseller suffixes and version stamps in any
+    combination (``newapi/deepseek-v4-flash-v2`` → ``deepseek-v4-flash``).
+    Most specific key wins (most tokens); ties fall back to the pinned →
+    catalog → plain-YAML precedence. A key carrying a version token that the
+    id does not carry is rejected, and so is a key with a *different* version
+    (``v3`` vs ``v4``) — different generations sit at different prices.
+    """
+    want = _tokens(model_id)
+    if len(want) < 2:
+        return None
+    want_versions = _version_tokens(want)
+    best: tuple[tuple[int, int], str, dict, bool] | None = None
+    for key, entry, tier in _named_entries(pricing):
+        have = _tokens(key)
+        if len(have) < 2 or len(have) > len(want):
+            continue
+        have_versions = _version_tokens(have)
+        if have_versions and not have_versions <= want_versions:
+            continue
+        if not _is_subsequence(have, want):
+            continue
+        rank = (-len(have), tier)
+        if best is None or rank < best[0]:
+            best = (rank, key, entry, tier == 1)
+    if best is None:
+        return None
+    _debug_match(model_id, best[1], "fuzzy")
+    return best[2], best[3]
+
+
+def _select_entry(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
+    """Resolve ``model_id`` to ``(entry, came_from_catalog)``.
+
+    Precedence: explicit user ``patterns`` → exact candidate chain → token
+    fuzzy match. ``None`` means no rule applies and default pricing is used.
+    """
+    for resolve in (_pattern_match, _exact_chain, _fuzzy_match):
+        hit = resolve(model_id, pricing)
+        if hit is not None:
+            return hit
+    return None
+
+
 def _utc_hour(at_ts: str | None) -> int:
     """Extract the UTC hour from a transcript ISO timestamp (or now).
 
@@ -326,57 +488,47 @@ def _select_tier_block(price: dict, prompt_tokens: int | None) -> dict:
 
 
 def _candidate_ids(model_id: str) -> list[str]:
-    """Lookup keys for ``model_id``, most specific first."""
-    # Strip provider-specific cache-variant suffixes like ``[1m]``,
-    # ``[1M]``, or even doubled ``[1M][1m]`` (the suffix is appended
-    # case-insensitively, and some APIs append it twice when the model
-    # is invoked with a 1-hour cache hint on top of the default 5-min).
-    # Then progressively shorter prefixes until a match is found.
-    candidates: list[str] = [model_id]
-    stripped = _CACHE_SUFFIX_RE.sub("", model_id)
-    if stripped != model_id:
-        candidates.append(stripped)
+    """Lookup keys for ``model_id``, most specific first.
 
-    # Normalize dot-delimited version numbers to dashes. Claude Code writes
-    # the model into the JSONL transcript's ``message.model`` as a *dot*
-    # form (``claude-opus-4.8``, ``claude-haiku-4.5``) while the pricing
-    # table keys are *dash* form (``claude-opus-4-8``). The ``.`` only
-    # appears between digits (version separator: ``4.8`` → ``4-8``), so a
-    # digit-bounded substitution rewrites the version without touching any
-    # other ``.`` (e.g. proxy ids that legitimately contain dots elsewhere).
-    # Without this, ``claude-opus-4.8`` never reaches ``claude-opus-4-8``:
-    # the ``-``-segment stripping below degrades it to ``claude-opus`` →
-    # ``claude`` and it falls into _DEFAULT_PRICING (≈10× under-count).
+    Three spelling axes are normalised, then crossed so combined forms resolve:
+
+    * ``[1m]`` / ``[1M]`` (even doubled) cache-variant suffixes are stripped.
+    * Dot version separators become dashes (``claude-opus-4.8`` →
+      ``claude-opus-4-8``); the dot form is kept as its own candidate because
+      some table keys are dot-form (``grok-4.5``).
+    * Proxy prefixes are stripped from the left (``newapi/x``,
+      ``openrouter/vendor/x``) **and** variant/version suffixes are stripped
+      from the right (``x-newapi``, ``x-v2``, ``x-20250714``).
+
+    The two strip directions are applied independently per form, so
+    ``newapi/deepseek-v4-flash-v2`` reaches ``deepseek-v4-flash`` — the old
+    single-pass chain reached neither base and fell through to default
+    pricing.
+    """
+    stripped = _CACHE_SUFFIX_RE.sub("", model_id)
+    forms = [stripped]
     normalized = _DOT_VERSION_RE.sub("-", stripped)
     if normalized != stripped:
-        candidates.append(normalized)
+        forms.append(normalized)
 
-    # Strip /-delimited proxy prefixes (openrouter/, opencode/, etc.).
-    # For a model id like "openrouter/anthropic/claude-opus-4-8", this
-    # appends "anthropic/claude-opus-4-8" and "claude-opus-4-8" as
-    # candidates — the rightmost segment is the real model id that
-    # matches the pricing table. We use the normalized (post-[1m],
-    # dot→dash) form so that proxy + cache-suffix + dot-version
-    # combinations like "openrouter/.../claude-opus-4.8[1m]" resolve.
-    if "/" in normalized:
-        segments = normalized.split("/")
-        for i in range(1, len(segments)):
-            candidates.append("/".join(segments[i:]))
+    out: list[str] = []
+    seen: set[str] = set()
 
-    parts = normalized.split("-")
-    while len(parts) > 1:
-        parts.pop()
-        candidates.append("-".join(parts))
+    def add(cand: str) -> None:
+        if cand and cand not in seen:
+            seen.add(cand)
+            out.append(cand)
 
-    # Dot 形式（如 grok-4.5）在 dot→dash 归一化后会变成 grok-4-5，剥离链
-    # 永远无法命中点号键（grok 官方键就是点号形式）。对原始形式同样做渐进
-    # 剥离，使 "grok-4.5-build" → "grok-4.5" 能精确命中。
-    if stripped != normalized:
-        parts = stripped.split("-")
-        while len(parts) > 1:
-            parts.pop()
-            candidates.append("-".join(parts))
-    return candidates
+    for form in forms:
+        segments = form.split("/")
+        variants = [form] + ["/".join(segments[i:]) for i in range(1, len(segments))]
+        for variant in variants:
+            add(variant)
+            parts = variant.split("-")
+            while len(parts) > 1:
+                parts.pop()
+                add("-".join(parts))
+    return out
 
 
 def _resolve_price(
@@ -412,37 +564,32 @@ def _resolve_price(
     authoritative block) and FX-converted into CNY for display, so the
     user still sees ¥ without us inventing a fake CNY price.
 
-    Source precedence, applied per candidate id (most specific first, so
-    a new ``claude-opus-5-5`` found on models.dev is not shadowed by the
-    older ``claude-opus-5`` YAML entry that prefix stripping reaches):
+    Source precedence per candidate id (most specific first, so a new
+    ``claude-opus-5-5`` found on models.dev is not shadowed by the older
+    ``claude-opus-5`` YAML entry that prefix stripping reaches):
 
       1. pinned YAML entry — from the user file, or carrying
          ``currency`` / ``prices`` / ``tide`` / ``tiers``
       2. models.dev catalog (USD, refreshed daily)
       3. plain builtin YAML entry (offline snapshot)
 
+    Matching layers, tried in order (:func:`_select_entry`):
+
+      1. user ``patterns:`` globs — explicit override, first match wins
+      2. exact candidate chain — ``[1m]`` / dot-version / prefix / suffix
+         stripping (:func:`_candidate_ids`)
+      3. token fuzzy match — table key tokens appear in the id in order,
+         same-version required (:func:`_fuzzy_match`)
+
     ``prompt_tokens`` (this call's input + cache_read + cache_write)
     selects the context-length tier, if the model has ``tiers``.
     """
     pricing = _load_pricing()
-    entry = None
-    remote = False
-    for cand in _candidate_ids(model_id):
-        local = _find_model_entry(cand, pricing)
-        if local is not None and _is_pinned(local):
-            entry = local
-            break
-        found = catalog.lookup(cand)
-        if found is not None:
-            entry, remote = found, True
-            break
-        if local is not None:
-            entry = local
-            break
-
-    if entry is None:
+    selected = _select_entry(model_id, pricing)
+    if selected is None:
         _debug_unresolved(model_id)
         return _DEFAULT_PRICING, base_currency, base_currency
+    entry, remote = selected
 
     if remote:
         # models.dev 一律 USD 标价，与 base_currency 设置无关
