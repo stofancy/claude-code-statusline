@@ -8,7 +8,7 @@ Supported providers:
   - DeepSeek: official ``GET /user/balance`` (API key via ``DEEPSEEK_API_KEY``)
   - OpenAI:   undocumented ``GET /dashboard/billing/credit_grants`` (browser session key via ``OPENAI_SESSION_KEY``)
   - MiniMax:  ``GET /v1/token_plan/remains`` — quota-based (auto-discovers token from mmx CLI state / env)
-  - Zhipu:    ``GET /api/monitor/usage/quota/limit`` — quota-based (API key via ``ZHIPU_API_KEY`` or ``ANTHROPIC_AUTH_TOKEN``)
+  - Zhipu:    ``GET /api/monitor/usage/quota/limit`` — quota-based (API key via ``ZHIPU_API_KEY`` only)
   - Anthropic: delegated to ``usage.py`` (not duplicated here)
 
 Set ``CCS_BALANCE_API=0`` to disable all network requests.
@@ -350,18 +350,15 @@ def _minimax_balance() -> dict | None:
 # ── Zhipu (GLM) ─────────────────────────────────────────────────────────────
 
 def _glm_api_key() -> str | None:
-    """获取智谱 API Key。
+    """获取智谱 API Key —— **只认 `ZHIPU_API_KEY`**。
 
-    Claude Code 兼容环境下，统一认证变量是 ``ANTHROPIC_AUTH_TOKEN`` /
-    ``ANTHROPIC_API_KEY``（而非 provider 专用的 ``ZHIPU_API_KEY``）——通过 cc-switch
-    等代理或直连智谱时，真实 key 通常就在这两个变量里。查找优先级：
-    ``ZHIPU_API_KEY`` → ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY``。
+    智谱余额查询打的是固定端点 open.bigmodel.cn；`ANTHROPIC_AUTH_TOKEN` /
+    `ANTHROPIC_API_KEY` 里的凭证属于其它服务或聚合代理（cc-switch 之类），把它们
+    发给智谱等于把凭证泄露给第三方，而且多数情况下本来就不是智谱的 key。
+    因此不做任何跨厂商回退：没有 `ZHIPU_API_KEY` 就不显示这块余额。
     """
-    for var in ("ZHIPU_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
-        val = os.getenv(var, "").strip()
-        if val:
-            return val
-    return None
+    val = os.getenv("ZHIPU_API_KEY", "").strip()
+    return val or None
 
 
 def _glm_window_quota(short: str, item: dict) -> dict:

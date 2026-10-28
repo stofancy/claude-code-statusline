@@ -108,3 +108,20 @@ def test_network_fail_does_not_leak_other_provider_cache(monkeypatch, tmp_path):
     assert result is None, (
         f"网络失败兜底串味返回了其他 provider 的缓存：{result!r}"
     )
+
+
+def test_glm_api_key_ignores_anthropic_credentials(monkeypatch):
+    """固定智谱端点不得接收其他服务或聚合代理的通用 Anthropic 凭证。"""
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "proxy-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+
+    assert balance_mod._glm_api_key() is None
+
+
+def test_glm_api_key_uses_explicit_zhipu_key(monkeypatch):
+    """显式 provider 凭证是查询智谱固定端点的唯一合法凭证。"""
+    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-secret")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "proxy-secret")
+
+    assert balance_mod._glm_api_key() == "zhipu-secret"
