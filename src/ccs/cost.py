@@ -407,30 +407,41 @@ def _select_entry(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
     return None
 
 
-def _utc_hour(at_ts: str | None) -> int:
-    """Extract the UTC hour from a transcript ISO timestamp (or now).
+def _utc_moment(at_ts: str | None) -> datetime:
+    """Parse a transcript ISO timestamp into an aware UTC datetime (or now).
 
     Transcript timestamps look like ``2026-08-15T17:48:42.980Z``. Unknown
-    formats fall back to the current UTC hour so tide pricing never throws.
+    formats fall back to the current UTC time so tide pricing never throws.
     """
     if not at_ts:
-        return datetime.now(timezone.utc).hour
+        return datetime.now(timezone.utc)
     try:
         dt = datetime.fromisoformat(str(at_ts).replace("Z", "+00:00"))
     except ValueError:
-        return datetime.now(timezone.utc).hour
+        return datetime.now(timezone.utc)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).hour
+    return dt.astimezone(timezone.utc)
+
+
+def _utc_hour(at_ts: str | None) -> int:
+    """Extract the UTC hour from a transcript ISO timestamp (or now)."""
+    return _utc_moment(at_ts).hour
 
 
 def _select_tide_block(price: dict, tide: dict, at_ts: str | None) -> dict:
     """Pick the ``peak`` / ``off_peak`` sub-block for a tide container.
 
     ``tide.peak_hours_utc`` is a list of half-open UTC hour intervals
-    ``[start, end)`` (DeepSeek: ``[[1,4],[6,10]]``). Hours inside any
-    interval are peak; everything else is off-peak. A flat price block
-    (no ``peak``/``off_peak`` keys) passes through unchanged.
+    ``[start, end)`` (DeepSeek: ``[[1,4],[6,10]]``). Peak pricing applies on
+    weekdays only: the vendor's rule is Monday–Friday Beijing time, and every
+    peak window (01:00–04:00, 06:00–10:00 UTC) falls in the same Beijing
+    calendar day, so the UTC weekday is the Beijing weekday throughout.
+
+    Chinese public holidays are also off-peak on the vendor's side; they are
+    not modeled here (no holiday calendar), so holiday calls inside a peak
+    window are billed at the peak rate. A flat price block (no
+    ``peak``/``off_peak`` keys) passes through unchanged.
     """
     if not isinstance(price, dict):
         return price
@@ -438,7 +449,10 @@ def _select_tide_block(price: dict, tide: dict, at_ts: str | None) -> dict:
     off_peak = price.get("off_peak")
     if not (isinstance(peak, dict) and isinstance(off_peak, dict)):
         return price
-    hour = _utc_hour(at_ts)
+    moment = _utc_moment(at_ts)
+    if moment.weekday() >= 5:  # Saturday / Sunday
+        return off_peak
+    hour = moment.hour
     for start, end in (tide.get("peak_hours_utc") or []):
         if start <= hour < end:
             return peak

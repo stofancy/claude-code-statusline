@@ -14,6 +14,12 @@ import ccs.cost as cost_mod
 
 U = dict(input=100_000, output=100_000, cache_read=100_000, cache_write=0)
 
+# 峰谷计价依赖调用时间：高峰价只在周一至周五生效，测试必须钉死在周一 02:00Z
+# 的高峰窗口（[1,4)），否则周末跑测试会拿到空闲价。
+PEAK_AT = "2026-08-17T02:00:00Z"      # 周一，高峰窗口
+OFF_PEAK_AT = "2026-08-17T05:30:00Z"  # 工作日，窗口外
+WEEKEND_AT = "2026-08-15T02:00:00Z"   # 周六，窗口内但按空闲计
+
 
 def last_cost(model_id, input=0, output=0, cache_read=0, cache_write=0):
     return cost_mod.fmt_last_cost(model_id, input, output, cache_read, cache_write)
@@ -91,13 +97,15 @@ def test_builtin_cny_native_models(usd, model_id, expected):
 # ── DeepSeek 峰谷：按每次调用的时间选价 ───────────────────────────────────
 
 @pytest.mark.parametrize("model_id, at, expected", [
-    ("deepseek-v4-pro", "2026-08-15T02:00:00Z", "¥3.63"),    # 高峰 [1,4)
-    ("deepseek-v4-pro", "2026-08-15T08:00:00Z", "¥3.63"),    # 高峰 [6,10)
-    ("deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),    # 空闲
-    ("deepseek-v4-flash", "2026-08-15T10:00:00Z", "¥0.502"), # 10 点是空闲（半开区间）
-    ("openrouter/deepseek/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
-    ("openrouter/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
-    ("opencode-go/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
+    ("deepseek-v4-pro", PEAK_AT, "¥3.63"),                    # 周一 02:00，高峰 [1,4)
+    ("deepseek-v4-pro", "2026-08-17T08:00:00Z", "¥3.63"),     # 周一 08:00，高峰 [6,10)
+    ("deepseek-v4-pro", OFF_PEAK_AT, "¥1.82"),                # 工作日窗口外
+    ("deepseek-v4-pro", WEEKEND_AT, "¥1.82"),                 # 周六窗口内 => 官方规则为空闲
+    ("deepseek-v4-pro", "2026-08-16T08:00:00Z", "¥1.82"),     # 周日高峰窗口 => 空闲
+    ("deepseek-v4-flash", "2026-08-17T10:00:00Z", "¥0.502"),  # 10 点是空闲（半开区间）
+    ("openrouter/deepseek/deepseek-v4-pro", OFF_PEAK_AT, "¥1.82"),
+    ("openrouter/deepseek-v4-pro", OFF_PEAK_AT, "¥1.82"),
+    ("opencode-go/deepseek-v4-pro", OFF_PEAK_AT, "¥1.82"),
 ])
 def test_tide_pricing(model_id, at, expected):
     assert call_cost(model_id, at, **U) == expected
@@ -106,8 +114,8 @@ def test_tide_pricing(model_id, at, expected):
 def test_tide_mixed_calls_priced_individually():
     one_m = dict(input=1_000_000, output=0, cache_read=0, cache_write=0)
     calls = {
-        "deepseek-v4-pro": [("2026-08-15T02:00:00Z", one_m), ("2026-08-15T05:30:00Z", one_m)],
-        "deepseek-v4-flash": [("2026-08-15T05:30:00Z", one_m)],
+        "deepseek-v4-pro": [(PEAK_AT, one_m), (OFF_PEAK_AT, one_m)],
+        "deepseek-v4-flash": [(OFF_PEAK_AT, one_m)],
     }
     # 9 + 4.5 + 1（Flash 空闲价已由 1.5 调整为 1.0）
     assert cost_mod.fmt_cost_multi({}, primary_model_id="deepseek-v4-pro", model_calls=calls) == "¥14.50"
@@ -189,7 +197,7 @@ def test_user_entry_shadows_proxy_prefix_match(usd):
     ("weihub/kimi-k2.7-code", "¥3.69"),         # 转售条目已废弃，前缀剥离后走官方价
 ])
 def test_variant_ids_match_base_model(model_id, expected):
-    assert last_cost(model_id, **U) == expected
+    assert call_cost(model_id, PEAK_AT, **U) == expected
 
 
 def test_version_veto_blocks_cross_generation(usd):
@@ -197,7 +205,7 @@ def test_version_veto_blocks_cross_generation(usd):
     write_user_pricing(
         "providers:\n  mine:\n    myvllm-deepseek-v3-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
     )
-    assert last_cost("newapi/myvllm-deepseek-v4-flash-preview", **U) == "¥1.00"
+    assert call_cost("newapi/myvllm-deepseek-v4-flash-preview", PEAK_AT, **U) == "¥1.00"
     # 同代则命中该用户条目（前缀 + 后缀都被吃掉，仅剩版本区分）
     assert last_cost("newapi/myvllm-deepseek-v3-flash-preview", input=100_000) == "$10.00"
 
@@ -212,7 +220,8 @@ def test_patterns_rule_overrides_exact_chain(usd):
     # `*` 跨 `/`，因此带网关前缀的 id 也命中；规则优先于精确链
     assert last_cost("newapi/deepseek-v4-flash-v2", input=100_000) == "$10.00"
     assert last_cost("deepseek-v4-flash", input=100_000) == "$10.00"
-    assert last_cost("deepseek-v4-pro", input=100_000) == "¥0.900"  # 未命中规则照常走表
+    # 未命中规则照常走表（高峰价 9 元/1M，同样是 1 次调用）
+    assert call_cost("deepseek-v4-pro", PEAK_AT, input=100_000) == "¥0.900"
 
 
 # ── 币种规则：有人民币价就按人民币算，没有才用美元价 ──────────────────────

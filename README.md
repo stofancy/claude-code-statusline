@@ -252,9 +252,10 @@ FX-converted at display time; CNY-priced models never are.
 | MiMo | `mimo-v2.6-pro` | 3.00 | 0.025 | 6.00 | ¥ |
 | MiMo | `mimo-v2.6-flash` | 1.00 | 0.02 | 2.00 | ¥ |
 
-DeepSeek peak hours are Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time (01:00–04:00,
-06:00–10:00 UTC), excluding Chinese public holidays; off-peak is half price and is
-selected per call. GLM cache writes are currently free; GLM list prices are tiered by
+DeepSeek peak windows are 09:00–12:00 and 14:00–18:00 Beijing time (01:00–04:00,
+06:00–10:00 UTC) on weekdays only; weekends are off-peak all day, and off-peak is half
+price, selected per call. Chinese public holidays are also off-peak on the vendor's
+side but are not modeled here (no holiday calendar). GLM cache writes are currently free; GLM list prices are tiered by
 input length and the table records the high tier. Models no longer on the vendor's
 pricing page (e.g. `deepseek-chat`, `deepseek-r1`, MiniMax M2 series, MiMo V2.5) keep
 their last known price for historical transcripts — see the per-vendor comments in
