@@ -226,7 +226,7 @@ The built-in table at `src/ccs/pricing.yaml` holds what models.dev cannot expres
 
 Model ids from third-party gateways are matched onto a table key by three layers: `patterns:` glob rules in `pricing.yaml` (explicit override, first match wins), then an exact chain that strips `[1m]` cache suffixes, dot versions and proxy prefixes/suffixes in any combination (`newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`), then a [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` match over keys whose tokens all appear in the id (a key carrying a version the id lacks, or a different generation, is rejected — `v3` requests never borrow `v4` prices). Unmatched ids use the default block and are logged with `CCS_DEBUG=1`.
 
-Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`), otherwise from USD. There is no exchange rate anywhere — the cost is displayed in the currency the vendor publishes: `¥` for CNY-priced models, `$` for USD-priced ones. A session mixing both renders `TOTAL` as segments (`¥12.35 + $4.56`).
+Currency rule: **one currency per session, never converted.** A session is shown in `¥` only when every model in it has a renminbi price; as soon as one model is priced in USD (Claude, GPT, Gemini, Grok, Kimi …), the whole line switches to `$` and the CNY-priced models are priced from their own dollar block (every CNY entry in `pricing.yaml` carries one — enforced by a test). No exchange rate is applied anywhere.
 
 Prices below are the **official list prices, verified 2026-10-28**, per million tokens, in each vendor's
 own currency (¥ native CNY where published, $ otherwise). No exchange rate is

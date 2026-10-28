@@ -240,11 +240,40 @@ def test_usd_model_never_relabelled_as_cny():
     assert last_cost("gpt-5", **U) == "$1.14"
 
 
-def test_mixed_currencies_render_as_segments():
-    # 人民币模型 + 美元模型：按币种分别求和，不做折算
+def test_cny_only_session_stays_cny():
+    # 全部模型都有人民币价 => 整行人民币
+    one_m = dict(input=1_000_000, output=0, cache_read=0, cache_write=0)
+    calls = {
+        "deepseek-v4-pro": [(PEAK_AT, one_m)],
+        "glm-5.2": [(PEAK_AT, one_m)],
+    }
+    assert cost_mod.fmt_cost_multi({}, model_calls=calls) == "¥17.00"
+
+
+def test_one_usd_model_switches_whole_session_to_usd():
+    # 只要有一个模型没有人民币价，整行按美元算：人民币模型改用它的美元块
     one_m = dict(input=1_000_000, output=0, cache_read=0, cache_write=0)
     calls = {
         "deepseek-v4-pro": [(PEAK_AT, one_m)],
         "claude-opus-5": [(PEAK_AT, one_m)],
     }
-    assert cost_mod.fmt_cost_multi({}, model_calls=calls) == "¥9.00 + $5.00"
+    assert cost_mod.session_currency(model_calls=calls) == "USD"
+    assert cost_mod.fmt_cost_multi({}, model_calls=calls) == "$6.32"
+    # 单个模型的 LAST 也跟随会话币种
+    assert cost_mod.fmt_last_cost("deepseek-v4-pro", 0, 0, 0, currency="USD") == "$0"
+
+
+def test_every_cny_entry_also_has_usd():
+    # 数据不变量：人民币块必须同时有美元块，否则「整行换美元」会退化成汇率折算
+    pricing = cost_mod._load_pricing()
+    missing = []
+    for prov, cfg in (pricing.get("providers") or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        for name, entry in cfg.items():
+            if not isinstance(entry, dict):
+                continue
+            prices = entry.get("prices")
+            if isinstance(prices, dict) and "CNY" in prices and "USD" not in prices:
+                missing.append(f"{prov}/{name}")
+    assert missing == []

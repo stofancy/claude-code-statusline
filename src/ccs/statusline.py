@@ -205,6 +205,11 @@ def main() -> None:
     subagent_total = agg["subagent_total"]
     subagent_running = agg["subagent_running"]
 
+    # 一次会话只显示一种货币：只要有一个模型没有人民币价，整行按美元算。
+    # LAST / TOTAL / NEXT 三处都用这一个币种，避免同一行出现两种符号。
+    session_cur = cost_mod.session_currency(
+        db.get_model_breakdown(session_id), metrics.get("model_calls"))
+
     official_usd = cost_data.get("total_cost_usd") if isinstance(cost_data, dict) else None
     try:
         if (balance_provider == "anthropic" and isinstance(official_usd, (int, float))
@@ -219,6 +224,7 @@ def main() -> None:
                 db.get_model_breakdown(session_id),
                 primary_model_id=actual_model_id or None,
                 model_calls=metrics.get("model_calls"),
+                currency=session_cur,
             )
     except Exception:
         cost_str = "-"
@@ -229,9 +235,11 @@ def main() -> None:
     try:
         if last_call:
             last_cost_str = cost_mod.fmt_cost_multi({}, model_calls={
-                _resolve_actual_model_id(last_call["model"]): [(last_call["at"], last_call["usage"])]})
+                _resolve_actual_model_id(last_call["model"]): [(last_call["at"], last_call["usage"])]},
+                currency=session_cur)
         else:
-            last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read, pc_cache_write)
+            last_cost_str = cost_mod.fmt_last_cost(actual_model_id, pc_input, pc_output, pc_cache_read,
+                                                   pc_cache_write, currency=session_cur)
     except Exception:
         last_cost_str = "-"
 
@@ -245,7 +253,7 @@ def main() -> None:
         lu = (last_call or {}).get("usage") or {}
         ratio_1h = lu.get("cache_write_1h", 0) / lu["cache_write"] if lu.get("cache_write") else 0
         pred_cost_str = cost_mod.fmt_last_cost(actual_model_id, pred_input, pred_output, pred_cache, pred_cache_write,
-                                               int(pred_cache_write * ratio_1h))
+                                               int(pred_cache_write * ratio_1h), currency=session_cur)
     except Exception:
         pred_cost_str = "-"
 

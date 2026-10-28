@@ -197,7 +197,7 @@ command = '"/path/to/python" -m ccs.codex_statusline'
 
 第三方网关的模型 id 由三层匹配落到表内键：`pricing.yaml` 的 `patterns:` glob 规则（显式覆盖，首个命中生效）→ 精确链（任意组合地剥离 `[1m]` 缓存后缀、点号版本、网关前缀与变体/版本后缀，如 `newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`）→ [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` 匹配（只在该 id 的 token 全覆盖的键里评分；带 id 缺失版本的键、以及不同代的键直接排除，`v3` 请求不会借用 `v4` 的价格）。三者都不命中的 id 用默认价，并在 `CCS_DEBUG=1` 时写入 debug 日志。
 
-币种规则：模型**有人民币价（`prices.CNY`）就按人民币价计算**，否则用美元价。全程没有汇率换算：人民币模型显示 `¥`，美元模型显示 `$`，混合会话的 `TOTAL` 按币种分段显示（`¥12.35 + $4.56`）。
+币种规则：**一次会话只用一种货币，全程不换算。** 会话里每个模型都有人民币价时显示 `¥`；只要出现一个美元定价的模型（Claude、GPT、Gemini、Grok、Kimi…），整行切到 `$`，人民币模型改用它自己的美元块（`pricing.yaml` 里每个人民币条目都带美元块，由测试保证）。全程不引入汇率。
 
 下表是 **2026-10-28 逐家核对的官方标价**，单位每百万 tokens，币种按各厂商发布口径
 （国内厂商为 ¥ 原生价，其余为 $）。两边都不做汇率换算。

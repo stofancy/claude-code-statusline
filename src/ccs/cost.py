@@ -5,29 +5,28 @@ per-model token breakdowns from ``model_usage`` (not ratio-based estimation).
 
 Currency model
 --------------
-**不做汇率换算，按厂商发布的币种显示。** 人民币定价的模型显示 ¥，美元定价的
-模型显示 $，都是厂商自己的标价。聚合时同一币种分别求和，混合币种按
-``¥12.35 + $4.56`` 分段显示 —— 不发明汇率、不把美元价贴成人民币。
+**一次会话只显示一种货币，全程不换算。** 人民币定价的模型同时带
+``prices.CNY`` 与 ``prices.USD``（各厂商两套官方/目录价并行存在）；只要会话里
+有一个模型没有人民币价，整行按美元显示，其它模型取各自的美元块。所以既不会
+出现 ``¥1.00 + $3.00`` 这样的混排，也不会把美元价贴上 ``¥``。
 
-A model block publishes prices either as a multi-currency ``prices`` map or
-as a legacy flat dict (USD)::
+A model block publishes prices as a multi-currency ``prices`` map::
 
     minimax:
       MiniMax-M3:
         prices:
-          CNY: { input_per_1m: 2.10, output_per_1m: 8.40, ... }
+          CNY: { input_per_1m: 2.10, output_per_1m: 8.40 }
+          USD: { input_per_1m: 0.30, output_per_1m: 1.20 }
 
-    openai:
-      gpt-5:                 # flat dict = 美元
-        input_per_1m: 1.25
-        output_per_1m: 10.00
+A legacy flat dict has no ``prices`` map and is USD.
 
 Resolution order for the *active* price block:
 
-  1. ``prices["CNY"]`` — 人民币块，存在即用。
-  2. ``prices["USD"]`` — 美元块。
-  3. First available key in ``prices`` — last-resort fallback.
-  4. Flat dict (legacy) — USD.
+  1. the session currency, when the block carries it (``CNY`` or ``USD``);
+  2. otherwise ``prices["CNY"]`` — 人民币块；
+  3. otherwise ``prices["USD"]``；
+  4. otherwise the first available key；
+  5. flat dict → USD.
 """
 
 import os
@@ -533,13 +532,16 @@ def _resolve_price(
     model_id: str,
     at_ts: str | None = None,
     prompt_tokens: int | None = None,
+    currency: str | None = None,
 ) -> tuple[dict, str]:
     """Return ``(price_dict, currency)`` — no currency conversion anywhere.
 
-    ``currency`` is the currency the resolved block is denominated in:
-    ``CNY`` when the model has a renminbi block, ``USD`` otherwise
-    (models.dev and flat YAML entries are USD). The cost is rendered in
-    that currency, exactly as the vendor publishes it.
+    ``currency`` is the currency to price in. ``None`` means the model's
+    own preference (CNY block if present, USD otherwise). A session that
+    contains any USD-only model passes ``"USD"`` so every model is priced
+    from its dollar block — that keeps the whole line in one currency
+    without inventing an exchange rate. When the requested currency is not
+    in the entry, models.dev (USD) is consulted, then the default block.
 
     Source precedence per candidate id (most specific first, so a new
     ``claude-opus-5-5`` found on models.dev is not shadowed by the older
@@ -572,21 +574,28 @@ def _resolve_price(
         # models.dev 一律美元标价
         return _select_tier_block(entry, prompt_tokens), "USD"
 
-    price, price_currency = _select_price_block(entry)
+    price, price_currency = _select_price_block(entry, currency)
+    if currency and price_currency != currency and currency == "USD":
+        # 条目没有美元块：退到 models.dev 的美元价，避免同一行出现两种货币
+        remote_price = catalog.lookup(model_id)
+        if isinstance(remote_price, dict):
+            return _select_tier_block(remote_price, prompt_tokens), "USD"
+        return _DEFAULT_PRICING, "USD"
     tide = entry.get("tide")
     if isinstance(tide, dict):
         price = _select_tide_block(price, tide, at_ts)
     return _select_tier_block(price, prompt_tokens), price_currency
 
 
-def _select_price_block(entry: dict) -> tuple[dict, str]:
+def _select_price_block(entry: dict, currency: str | None = None) -> tuple[dict, str]:
     """Pick the price block and its currency.
 
     Resolution order:
 
-      1. ``prices["CNY"]`` — 人民币块，存在即用。
-      2. ``prices["USD"]`` — 美元块。
-      3. First available key — last-resort fallback.
+      1. ``prices[currency]`` — 会话币种，存在即用。
+      2. ``prices["CNY"]`` — 人民币块。
+      3. ``prices["USD"]`` — 美元块。
+      4. First available key — last-resort fallback.
 
     Flat dict (no ``prices`` key) is a legacy entry priced in USD.
 
@@ -597,7 +606,7 @@ def _select_price_block(entry: dict) -> tuple[dict, str]:
     """
     prices_map = entry.get("prices")
     if isinstance(prices_map, dict) and prices_map:
-        for cur in ("CNY", "USD"):
+        for cur in ((currency,) if currency else ()) + ("CNY", "USD"):
             block = prices_map.get(cur)
             if isinstance(block, dict):
                 return block, cur
@@ -659,20 +668,38 @@ def _prompt_tokens(usage: dict) -> int:
     return (usage.get("input", 0) or 0) + (usage.get("cache_read", 0) or 0) + (usage.get("cache_write", 0) or 0)
 
 
+def session_currency(
+    model_breakdown: dict | None = None,
+    model_calls: dict | None = None,
+) -> str:
+    """Currency for the whole session: ``CNY`` only if every model has one.
+
+    A model that has no renminbi price (Claude, GPT, Gemini, Grok, Kimi …)
+    forces the session to USD — otherwise the line would have to mix
+    currencies or invent an exchange rate.
+    """
+    ids = list(model_calls or {}) or list(model_breakdown or {})
+    for model_id in ids:
+        _, cur = _resolve_price(model_id)
+        if cur != "CNY":
+            return "USD"
+    return "CNY"
+
+
 def fmt_cost_multi(
     model_breakdown: dict,
     primary_model_id: str | None = None,
     model_calls: dict | None = None,
+    currency: str | None = None,
 ) -> str:
     """Render the cumulative cost string for a per-model usage breakdown.
 
-    Costs are summed per currency: ``{CNY: ..., USD: ...}``. One currency →
-    one number (``¥12.35``); several → segments joined by `` + ``
-    (``¥12.35 + $4.56``). No exchange rate is applied, so a USD-priced model
-    never shows up as a dollar figure relabelled with ``¥``.
+    The whole session is priced in a single currency (:func:`session_currency`
+    unless ``currency`` is given), so the result is always one number with one
+    symbol — never ``¥1.00 + $3.00``, never an exchange rate.
 
-    ``primary_model_id`` is unused for currency purposes (kept for call-site
-    compatibility); it no longer picks a winning currency.
+    ``primary_model_id`` is kept for call-site compatibility; it no longer
+    affects the currency.
 
     **Per-call precision (tide models):** pass ``model_calls`` as
     ``{model_id: [(iso_ts, usage), ...]}`` to price each API call with
@@ -687,12 +714,13 @@ def fmt_cost_multi(
     if not model_breakdown and not model_calls:
         return "-"
 
-    by_currency: dict[str, float] = {}
+    cur = currency or session_currency(model_breakdown, model_calls)
+    total = 0.0
 
     def _acc_cost(model_id: str, usage: dict, at_ts: str | None, prompt: int | None) -> None:
-        price, currency = _resolve_price(
-            model_id, at_ts=at_ts, prompt_tokens=prompt)
-        by_currency[currency] = by_currency.get(currency, 0.0) + _model_cost_in_native(price, usage)
+        nonlocal total
+        price, _ = _resolve_price(model_id, at_ts=at_ts, prompt_tokens=prompt, currency=cur)
+        total += _model_cost_in_native(price, usage)
 
     if model_calls:
         for model_id, calls in model_calls.items():
@@ -702,16 +730,7 @@ def fmt_cost_multi(
         for model_id, usage in model_breakdown.items():
             _acc_cost(model_id, usage, None, None)
 
-    if not by_currency:
-        return "-"
-
-    # 稳定顺序：人民币在前，其次美元，其余按字母。
-    order = {"CNY": 0, "USD": 1}
-    parts = [
-        _fmt_cost_val(_symbol_for(cur), total)
-        for cur, total in sorted(by_currency.items(), key=lambda kv: (order.get(kv[0], 2), kv[0]))
-    ]
-    return " + ".join(parts)
+    return _fmt_cost_val(_symbol_for(cur), total)
 
 
 def fmt_usd(amount: float) -> str:
@@ -726,8 +745,13 @@ def fmt_last_cost(
     per_call_cache_read: int,
     per_call_cache_write: int = 0,
     per_call_cache_write_1h: int = 0,
+    currency: str | None = None,
 ) -> str:
-    """Cost of the most recent turn for a single model, in its own currency."""
+    """Cost of the most recent turn for a single model.
+
+    ``currency`` follows the session's currency so ``LAST`` and ``TOTAL``
+    always show the same symbol.
+    """
     usage = {
         "input": per_call_input,
         "output": per_call_output,
@@ -735,8 +759,8 @@ def fmt_last_cost(
         "cache_write": per_call_cache_write,
         "cache_write_1h": per_call_cache_write_1h,
     }
-    price, currency = _resolve_price(model_id, prompt_tokens=_prompt_tokens(usage))
+    price, cur = _resolve_price(model_id, prompt_tokens=_prompt_tokens(usage), currency=currency)
     cost = _model_cost_in_native(price, usage)
     if cost < 0.0001:
-        return f"{_symbol_for(currency)}0"
-    return _fmt_cost_val(_symbol_for(currency), cost)
+        return f"{_symbol_for(cur)}0"
+    return _fmt_cost_val(_symbol_for(cur), cost)
