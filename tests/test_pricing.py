@@ -216,12 +216,12 @@ def test_patterns_rule_overrides_exact_chain(usd):
 # ── 币种规则：有人民币价就按人民币算，没有才用美元价 ──────────────────────
 
 @pytest.mark.parametrize("entry_yaml, expected", [
-    # 双币种但未声明 currency：CNY 块优先，显示 ¥
+    # 双币种：CNY 块优先，显示 ¥（USD 写在前面也一样）
     ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
      "        CNY:\n          input_per_1m: 100\n          output_per_1m: 0\n", "¥10.00"),
-    # 声明 USD 但提供了 CNY 块：仍按人民币算
-    ("      currency: USD\n      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
-     "        CNY:\n          input_per_1m: 50\n          output_per_1m: 0\n", "¥5.00"),
+    # 块顺序无关
+    ("      prices:\n        CNY:\n          input_per_1m: 50\n          output_per_1m: 0\n"
+     "        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "¥5.00"),
     # 只有美元价：回退美元价，再按汇率显示为 ¥
     ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "¥7.18"),
 ])

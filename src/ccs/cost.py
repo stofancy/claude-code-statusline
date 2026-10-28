@@ -5,52 +5,31 @@ per-model token breakdowns from ``model_usage`` (not ratio-based estimation).
 
 Currency model
 --------------
-Every model has a *native* currency — the currency in which its prices are
-authored. A model can declare it explicitly via ``currency: <CODE>``, or
-implicitly (defaults to ``base_currency`` when omitted).
-
-A model may also publish prices in multiple currencies via the ``prices``
-field, keyed by ISO 4217 code::
+**人民币优先：有人民币价就按人民币计价，没有才用美元价。** A model block
+publishes prices either as a multi-currency ``prices`` map or as a legacy
+flat dict (which is priced in ``base_currency``)::
 
     minimax:
       MiniMax-M3:
-        currency: CNY
         prices:
           CNY: { input_per_1m: 2.10, output_per_1m: 8.40, ... }
           USD: { input_per_1m: 0.29, output_per_1m: 1.17, ... }
 
-Resolution order for the *active* price block of a model:
+There is no ``currency`` field: the block that gets used decides both the
+computation currency and the symbol shown.
 
-  1. ``prices[model_currency]`` — the model's own native block. The cost
-     is exact, no FX. Preferred path whenever the model publishes a
-     block in its declared currency.
-  2. ``prices[display_currency]`` — exact value in the user's chosen
-     currency, no FX. Used when the model has no native block.
-  3. ``prices[base_currency]`` — exact value in the FX pivot, then
-     FX-converted to the model's target display currency.
+Resolution order for the *active* price block:
+
+  1. ``prices["CNY"]`` — 人民币块，只要存在就用它，精确无 FX。
+  2. ``prices[base_currency]`` — 无 CNY 块时回退（默认 USD）。
+  3. ``prices[display_currency]`` — 用户显示币种。
   4. First available key in ``prices`` — last-resort fallback.
-  5. Flat dict (legacy) — used as-is; price currency = ``currency`` field
-     if present, else ``base_currency``.
+  5. Flat dict (legacy) — priced in ``base_currency``.
 
-The model's **target display currency** (the symbol the user sees) is the
-declared ``currency`` field if set, else the user's ``display_currency``.
-This is computed separately from the price currency and joined by a
-single FX step (when they differ) so the displayed number is always in
-the user's intended currency while the underlying math stays exact.
-
-Why split display from price currency?
-
-  • Models with multi-currency pricing stay precise: we never FX-round
-    a published list price (CNY 2.10 stays 2.10, not 2.10 / 7.18 × 7.18).
-  • A model whose list price is denominated in CNY displays as ¥ even
-    when the user has ``display_currency: USD`` — the user reads the
-    native price they actually pay, not a 7.18-multiplied shadow.
-  • When a model declares ``currency: CNY`` but only ships ``prices:
-    { USD: ... }``, the cost is computed in USD (authoritative) and
-    FX-converted to CNY for display — the user still sees ¥, without
-    us inventing a CNY price that doesn't exist.
-  • When the breakdown mixes multiple target currencies, the totals are
-    FX-converted into ``display_currency`` for the final sum.
+The **display currency** follows the block that was used: 用人民币块计价就
+显示 ¥（原生价，不经汇率）；用其它币种计价则经 ``fx_rates`` 换算成
+``display_currency``。Costs priced in different currencies are FX-converted
+into ``display_currency`` when summed by :func:`fmt_cost_multi`.
 """
 
 import os
@@ -130,7 +109,7 @@ _FUZZY_CUTOFF = 50.0
 
 # 带这些键的 YAML 条目表达了 models.dev 无法表达的信息（原生币种、峰谷、
 # 自定义分档），同一候选 id 下优先于 models.dev。
-_PINNED_KEYS = ("currency", "prices", "tide", "tiers")
+_PINNED_KEYS = ("prices", "tide", "tiers")
 
 # 分档合并时按「同义键组」整组替换，避免 tier 的 cache_read_per_1m 被基础块
 # 残留的 input_cache_hit_per_1m（优先级更高的别名）遮蔽。
@@ -551,32 +530,18 @@ def _resolve_price(
 
     * ``price_dict``        — the resolved price block (after the
       ``prices``-map selection rules below).
-    * ``price_currency``    — the ISO code of the currency the price is
-      actually denominated in. May differ from the model's declared
-      ``currency`` if that currency's block is missing from ``prices``
-      and we fell back to another block.
+    * ``price_currency``    — the ISO code of the currency the price block
+      is denominated in (``CNY`` when the model has a renminbi block).
     * ``target_display_currency`` — the currency to render this model's
-      cost in:
-
-      - The model's declared ``currency`` field, **if present** — this is
-        the explicit "I am a CNY-native model" signal. Per-model native
-        display is the right answer for that model.
-      - ``display_currency`` otherwise — the user has no per-model
-        preference signal, so the cost is rendered in whatever display
-        currency they configured.
-
-    The split between ``price_currency`` and ``target_display_currency``
-    matters when a model declares ``currency: CNY`` but only ships a
-    ``prices:`` block in ``USD``: the cost is computed in USD (the only
-    authoritative block) and FX-converted into CNY for display, so the
-    user still sees ¥ without us inventing a fake CNY price.
+      cost in: ``CNY`` when it was priced in CNY, else the configured
+      ``display_currency``.
 
     Source precedence per candidate id (most specific first, so a new
     ``claude-opus-5-5`` found on models.dev is not shadowed by the older
     ``claude-opus-5`` YAML entry that prefix stripping reaches):
 
       1. pinned YAML entry — from the user file, or carrying
-         ``currency`` / ``prices`` / ``tide`` / ``tiers``
+         ``prices`` / ``tide`` / ``tiers``
       2. models.dev catalog (USD, refreshed daily)
       3. plain builtin YAML entry (offline snapshot)
 
@@ -585,7 +550,7 @@ def _resolve_price(
       1. user ``patterns:`` globs — explicit override, first match wins
       2. exact candidate chain — ``[1m]`` / dot-version / prefix / suffix
          stripping (:func:`_candidate_ids`)
-      3. token fuzzy match — table key tokens appear in the id in order,
+      3. rapidfuzz token match — keys whose tokens all appear in the id,
          same-version required (:func:`_fuzzy_match`)
 
     ``prompt_tokens`` (this call's input + cache_read + cache_write)
@@ -602,31 +567,20 @@ def _resolve_price(
         # models.dev 一律 USD 标价，与 base_currency 设置无关
         return _select_tier_block(entry, prompt_tokens), "USD", display_currency
 
-    has_explicit_currency = "currency" in entry
-    model_currency = (entry.get("currency") or base_currency).upper()
-    price, price_currency = _select_price_block(
-        entry, model_currency, display_currency, base_currency
-    )
+    price, price_currency = _select_price_block(entry, base_currency, display_currency)
     tide = entry.get("tide")
     if isinstance(tide, dict):
         price = _select_tide_block(price, tide, at_ts)
     price = _select_tier_block(price, prompt_tokens)
-    # 用人民币价计算时也以人民币显示（原生价不经过汇率）；其余沿用声明币种，
-    # 未声明则用用户显示币种。
-    if price_currency == "CNY":
-        target = "CNY"
-    elif has_explicit_currency:
-        target = model_currency
-    else:
-        target = display_currency
+    # 用哪个块计价就按哪个币种显示：人民币块原生显示 ¥，其它币种换算成显示币种。
+    target = "CNY" if price_currency == "CNY" else display_currency
     return price, price_currency, target
 
 
 def _select_price_block(
     entry: dict,
-    model_currency: str,
-    display_currency: str,
     base_currency: str,
+    display_currency: str,
 ) -> tuple[dict, str]:
     """Pick the price block to compute the cost from.
 
@@ -636,17 +590,14 @@ def _select_price_block(
 
     Multi-currency ``prices`` map (resolution order):
 
-      1. ``prices["CNY"]`` — 人民币主计价币种，无视 ``currency`` 声明。
+      1. ``prices["CNY"]`` — 人民币块，存在即用（主计价币种）。
       2. ``prices[base_currency]`` — 无 CNY 块时回退（默认 USD）。
-      3. ``prices[model_currency]`` — 模型声明的原生币种。
-      4. ``prices[display_currency]`` — 用户显示币种。
-      5. First available key — last-resort fallback.
+      3. ``prices[display_currency]`` — 用户显示币种。
+      4. First available key — last-resort fallback.
 
     Legacy flat dict (no ``prices`` key):
 
-      • Use as-is. Returned price currency is the ``model_currency``
-        argument (i.e. ``entry['currency']`` if declared, else
-        ``base_currency``).
+      • Use as-is, priced in ``base_currency``.
 
     A currency block may be a *tide container* — ``{peak: {...},
     off_peak: {...}}`` — for peak/off-peak pricing (DeepSeek 峰谷).
@@ -655,7 +606,7 @@ def _select_price_block(
     """
     prices_map = entry.get("prices")
     if isinstance(prices_map, dict) and prices_map:
-        for cur in ("CNY", base_currency, model_currency, display_currency):
+        for cur in ("CNY", base_currency, display_currency):
             block = prices_map.get(cur)
             if isinstance(block, dict):
                 return block, cur
@@ -664,7 +615,7 @@ def _select_price_block(
                 return block, cur
         # Malformed prices map — fall through to flat treatment.
 
-    return entry, model_currency
+    return entry, base_currency
 
 
 def _currency_settings() -> tuple[str, str, dict]:

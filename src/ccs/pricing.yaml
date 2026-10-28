@@ -8,21 +8,20 @@
 #   • MiMo:      https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
 #   • MiniMax:   https://platform.minimaxi.com/docs/guides/pricing-paygo
 #
-# Per-model native currency
-# -------------------------
-# Every model block may declare a `currency: <CODE>` (defaulting to
-# `base_currency` below) and an optional multi-currency `prices:` map.
-# A model with native USD prices and no `currency` field is treated as
-# USD — back-compatible with the legacy flat-dict format.
+# Per-model currency
+# ------------------
+# A model block carries either a multi-currency `prices:` map
+# (`prices.CNY`, `prices.USD`, …) or a legacy flat dict (priced in
+# `base_currency`, i.e. USD). There is no `currency:` field — the block
+# that is used decides the currency.
 #
 # Resolution order at lookup time — **人民币优先，无人民币价回退美元**:
-#   1. `prices.CNY`               — 人民币主计价币种，无视 `currency` 声明
+#   1. `prices.CNY`               — 有人民币价就按人民币计价
 #   2. `prices[base_currency]`    — 无 CNY 块时回退（默认 USD）
-#   3. `prices[model_currency]`   — 模型声明的原生币种
-#   4. `prices[display_currency]` — 用户显示币种
-#   5. 首个可用块                 — 最后兜底
-# 计价所用币种即显示币种；用 USD 块计价时才经 FX 换算成显示币种。
-# 反之，只有 `prices.USD` 的模型照旧按美元计价后换算为 ¥ 显示。
+#   3. `prices[display_currency]` — 用户显示币种
+#   4. 首个可用块                 — 最后兜底
+# 用哪个块计价就按哪个币种显示（CNY 计价显示 ¥，不经过汇率）；用非 CNY 块
+# 计价时才经 `fx_rates` 换算成显示币种。
 #
 # `base_currency` is the FX pivot (USD by default). `display_currency`
 # defaults to **CNY** so the status line shows ¥ — the convention for
@@ -209,7 +208,6 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   deepseek:
     deepseek-v4-pro:
-      currency: CNY
       tide:
         peak_hours_utc: [[1, 4], [6, 10]]
       prices:
@@ -233,7 +231,6 @@ providers:
             output_per_1m: 1.98
 
     deepseek-v4-flash:
-      currency: CNY
       tide:
         peak_hours_utc: [[1, 4], [6, 10]]
       prices:
@@ -369,16 +366,15 @@ providers:
 
   # ─────────────────────────────────────────────────────────────────────────
   # Xiaomi MiMo — list price published in CNY (元) per 1M tokens. Authored
-  # here in CNY with `currency: CNY` so the per-model native currency is
-  # preserved. USD equivalents are reproduced under `prices.USD` for users
-  # whose `display_currency` is USD.
+  # here in CNY under `prices.CNY`, so CNY is used for computing the cost
+  # (CNY-first rule). USD equivalents are reproduced under `prices.USD`
+  # as the fallback for models without a CNY block.
   # https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
   # V2.5 pricing effective 2026-05-27. Cache write is free (promotional).
   # V2-pro / V2-omni will be redirected to V2.5 from 2026-06-01, sunset 2026-06-30.
   # ─────────────────────────────────────────────────────────────────────────
   mimo:
     mimo-v2.5-pro:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 3.00
@@ -390,7 +386,6 @@ providers:
           output_per_1m: 0.87
 
     mimo-v2.5:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 1.00
@@ -402,7 +397,6 @@ providers:
           output_per_1m: 0.28
 
     mimo-v2-pro:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 3.00
@@ -414,7 +408,6 @@ providers:
           output_per_1m: 0.87
 
     mimo-v2-omni:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 1.00
@@ -426,7 +419,6 @@ providers:
           output_per_1m: 0.28
 
     mimo-v2-flash:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 0.70
@@ -439,9 +431,9 @@ providers:
 
   # ─────────────────────────────────────────────────────────────────────────
   # MiniMax — list price is published in CNY (元) per 1M tokens. Authored
-  # here in CNY with `currency: CNY` so the per-model native currency is
-  # preserved (no FX rounding, status line shows ¥ as published). USD
-  # equivalents are reproduced under `prices.USD` for users whose
+  # here in CNY under `prices.CNY` (CNY-first rule: no FX rounding, the
+  # status line shows ¥ as published). USD equivalents are reproduced
+  # under `prices.USD` for users whose
   # `display_currency` is USD — they pick up the precise USD value when
   # one is published, and fall back to the CNY block + FX otherwise.
   # Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
@@ -464,7 +456,6 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   minimax:
     MiniMax-M2:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 2.10
@@ -478,7 +469,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.1:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 2.10
@@ -492,7 +482,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.1-HightSpeed:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 4.20
@@ -506,7 +495,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.5:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 2.10
@@ -520,7 +508,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.5-HightSpeed:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 4.20
@@ -534,7 +521,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.7:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 2.10
@@ -548,7 +534,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M2.7-HightSpeed:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 4.20
@@ -562,7 +547,6 @@ providers:
           cache_write_per_1m: 0.3656
 
     MiniMax-M3:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 2.10
@@ -575,7 +559,7 @@ providers:
 
   # ─────────────────────────────────────────────────────────────────────────
   # Zhipu BigModel (GLM series) — list price published in CNY (元) per 1M
-  # tokens. Authored in CNY with `currency: CNY` so the status line shows ¥
+  # tokens. Authored in CNY under `prices.CNY` so the status line shows ¥
   # as published. USD equivalents are reproduced under `prices.USD`.
   # Source: https://bigmodel.cn/pricing (verified 2026-06-15)
   #
@@ -602,7 +586,6 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   zhipu:
     glm-5.2:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 8.00
@@ -614,7 +597,6 @@ providers:
           output_per_1m: 3.8997
 
     glm-5.1:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 8.00
@@ -626,7 +608,6 @@ providers:
           output_per_1m: 3.8997
 
     glm-5-turbo:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 7.00
@@ -638,7 +619,6 @@ providers:
           output_per_1m: 3.6212
 
     glm-5:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 6.00
@@ -650,7 +630,6 @@ providers:
           output_per_1m: 3.0641
 
     glm-4.7:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 4.00
@@ -662,7 +641,6 @@ providers:
           output_per_1m: 2.2284
 
     glm-4.5-air:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 1.20
@@ -674,7 +652,6 @@ providers:
           output_per_1m: 1.1142
 
     glm-4.7-flashx:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 0.50
@@ -686,7 +663,6 @@ providers:
           output_per_1m: 0.4178
 
     glm-4.7-flash:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 0.00
@@ -723,7 +699,6 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   weihub:
     weihub/glm-5.2:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 8.00
@@ -735,7 +710,6 @@ providers:
           output_per_1m: 3.8997
 
     weihub/kimi-k2.7-code:
-      currency: CNY
       prices:
         CNY:
           input_per_1m: 6.50

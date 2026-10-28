@@ -227,7 +227,7 @@ The built-in table at `src/ccs/pricing.yaml` holds what models.dev cannot expres
 
 Model ids from third-party gateways are matched onto a table key by three layers: `patterns:` glob rules in `pricing.yaml` (explicit override, first match wins), then an exact chain that strips `[1m]` cache suffixes, dot versions and proxy prefixes/suffixes in any combination (`newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`), then a [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` match over keys whose tokens all appear in the id (a key carrying a version the id lacks, or a different generation, is rejected — `v3` requests never borrow `v4` prices). Unmatched ids use the default block and are logged with `CCS_DEBUG=1`.
 
-Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`, regardless of the declared `currency`), and USD is the fallback for models without a CNY price; USD-priced models are converted into the display currency via `fx_rates`.
+Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`; entries no longer declare a `currency`, the block used decides the symbol), and USD is the fallback for models without a CNY price; USD-priced models are converted into the display currency via `fx_rates`.
 
 All prices in **CNY (¥)** per million tokens.
 
