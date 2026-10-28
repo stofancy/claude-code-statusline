@@ -197,6 +197,8 @@ command = '"/path/to/python" -m ccs.codex_statusline'
 
 第三方网关的模型 id 由三层匹配落到表内键：`pricing.yaml` 的 `patterns:` glob 规则（显式覆盖，首个命中生效）→ 精确链（任意组合地剥离 `[1m]` 缓存后缀、点号版本、网关前缀与变体/版本后缀，如 `newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`）→ [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` 匹配（只在该 id 的 token 全覆盖的键里评分；带 id 缺失版本的键、以及不同代的键直接排除，`v3` 请求不会借用 `v4` 的价格）。三者都不命中的 id 用默认价，并在 `CCS_DEBUG=1` 时写入 debug 日志。
 
+币种规则：模型**有人民币价（`prices.CNY`）就按人民币价计算**，不理会声明的 `currency`；没有人民币价时才回退美元价，美元价再经 `fx_rates` 换算成显示币种。
+
 所有价格均以 **CNY（¥）** 每百万 token 计。
 
 | 提供商 | 模型 | 输入 | 缓存命中 | 缓存写入 | 输出 |
@@ -299,7 +301,7 @@ Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件
 | `CCS_BALANCE_TTL` | 提供商余额缓存刷新间隔（秒，最低 `180`，默认 `300`） |
 | `DEEPSEEK_API_KEY` / `OPENAI_SESSION_KEY` / `MINIMAX_API_KEY` | `BAL` 余额段的提供商凭证 |
 | `CCS_LANG` | 界面语言——`en`（默认）或 `zh`；未设时回落到 `$LANG`/`$LC_ALL` |
-| `CCS_CURRENCY` | 覆盖显示币种（通过 `pricing.yaml` 的 `fx_rates` 换算） |
+| `CCS_CURRENCY` | 覆盖显示币种（有人民币价按人民币计价，否则美元价经 `fx_rates` 换算） |
 
 ## 数据库
 

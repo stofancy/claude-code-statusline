@@ -15,10 +15,14 @@
 # A model with native USD prices and no `currency` field is treated as
 # USD — back-compatible with the legacy flat-dict format.
 #
-# Resolution order at lookup time:
-#   1. `prices[display_currency]` — exact native value, no FX applied
-#   2. `prices[base_currency]`   — exact native value, FX to display
-#   3. Flat dict (legacy)        — used as-is
+# Resolution order at lookup time — **人民币优先，无人民币价回退美元**:
+#   1. `prices.CNY`               — 人民币主计价币种，无视 `currency` 声明
+#   2. `prices[base_currency]`    — 无 CNY 块时回退（默认 USD）
+#   3. `prices[model_currency]`   — 模型声明的原生币种
+#   4. `prices[display_currency]` — 用户显示币种
+#   5. 首个可用块                 — 最后兜底
+# 计价所用币种即显示币种；用 USD 块计价时才经 FX 换算成显示币种。
+# 反之，只有 `prices.USD` 的模型照旧按美元计价后换算为 ¥ 显示。
 #
 # `base_currency` is the FX pivot (USD by default). `display_currency`
 # defaults to **CNY** so the status line shows ¥ — the convention for

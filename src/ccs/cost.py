@@ -611,7 +611,14 @@ def _resolve_price(
     if isinstance(tide, dict):
         price = _select_tide_block(price, tide, at_ts)
     price = _select_tier_block(price, prompt_tokens)
-    target = model_currency if has_explicit_currency else display_currency
+    # 用人民币价计算时也以人民币显示（原生价不经过汇率）；其余沿用声明币种，
+    # 未声明则用用户显示币种。
+    if price_currency == "CNY":
+        target = "CNY"
+    elif has_explicit_currency:
+        target = model_currency
+    else:
+        target = display_currency
     return price, price_currency, target
 
 
@@ -621,19 +628,19 @@ def _select_price_block(
     display_currency: str,
     base_currency: str,
 ) -> tuple[dict, str]:
-    """Pick the price block whose currency best matches the user's intent.
+    """Pick the price block to compute the cost from.
+
+    Currency rule: **CNY first, USD as the fallback.** The cost of a model
+    is computed from its renminbi block whenever one exists; only models
+    without a CNY block are priced in USD (and FX-converted for display).
 
     Multi-currency ``prices`` map (resolution order):
 
-      1. ``prices[model_currency]`` — exact value in the model's native
-         currency, no FX. Preferred when the model publishes a block in
-         its declared currency.
-      2. ``prices[display_currency]`` — exact value in the user's chosen
-         display currency, no FX. Used when the model doesn't ship a
-         native block.
-      3. ``prices[base_currency]`` — exact value in the FX pivot, then
-         FX-converted to the model's target display currency.
-      4. First available key — last-resort fallback.
+      1. ``prices["CNY"]`` — 人民币主计价币种，无视 ``currency`` 声明。
+      2. ``prices[base_currency]`` — 无 CNY 块时回退（默认 USD）。
+      3. ``prices[model_currency]`` — 模型声明的原生币种。
+      4. ``prices[display_currency]`` — 用户显示币种。
+      5. First available key — last-resort fallback.
 
     Legacy flat dict (no ``prices`` key):
 
@@ -648,15 +655,10 @@ def _select_price_block(
     """
     prices_map = entry.get("prices")
     if isinstance(prices_map, dict) and prices_map:
-        if (model_currency in prices_map
-                and isinstance(prices_map[model_currency], dict)):
-            return prices_map[model_currency], model_currency
-        if (display_currency in prices_map
-                and isinstance(prices_map[display_currency], dict)):
-            return prices_map[display_currency], display_currency
-        if (base_currency in prices_map
-                and isinstance(prices_map[base_currency], dict)):
-            return prices_map[base_currency], base_currency
+        for cur in ("CNY", base_currency, model_currency, display_currency):
+            block = prices_map.get(cur)
+            if isinstance(block, dict):
+                return block, cur
         for cur, block in prices_map.items():
             if isinstance(block, dict):
                 return block, cur

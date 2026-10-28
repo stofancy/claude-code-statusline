@@ -213,6 +213,31 @@ def test_patterns_rule_overrides_exact_chain(usd):
     assert last_cost("deepseek-v4-pro", input=100_000) == "¥0.900"  # 未命中规则照常走表
 
 
+# ── 币种规则：有人民币价就按人民币算，没有才用美元价 ──────────────────────
+
+@pytest.mark.parametrize("entry_yaml, expected", [
+    # 双币种但未声明 currency：CNY 块优先，显示 ¥
+    ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
+     "        CNY:\n          input_per_1m: 100\n          output_per_1m: 0\n", "¥10.00"),
+    # 声明 USD 但提供了 CNY 块：仍按人民币算
+    ("      currency: USD\n      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
+     "        CNY:\n          input_per_1m: 50\n          output_per_1m: 0\n", "¥5.00"),
+    # 只有美元价：回退美元价，再按汇率显示为 ¥
+    ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "¥7.18"),
+])
+def test_cny_price_preferred_over_usd(entry_yaml, expected):
+    write_user_pricing("providers:\n  mine:\n    my-model-x:\n" + entry_yaml)
+    assert last_cost("my-model-x", input=100_000) == expected
+
+
+def test_usd_price_kept_when_display_is_usd(usd):
+    write_user_pricing(
+        "providers:\n  mine:\n    my-model-y:\n      prices:\n"
+        "        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
+    )
+    assert last_cost("my-model-y", input=100_000) == "$1.00"
+
+
 @pytest.mark.parametrize("fetched, user_pin, expected", [
     (None, None, "¥21.90"),   # 内置快照 7.18
     (6.5, None, "¥19.82"),    # 每日拉取的汇率
