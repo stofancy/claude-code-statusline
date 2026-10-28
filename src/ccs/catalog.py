@@ -1,11 +1,11 @@
-"""Remote pricing catalog: models.dev model prices + daily FX rates.
+"""Remote pricing catalog: models.dev model prices.
 
-Two small on-disk caches under ``~/.claude/statusline/``:
+One on-disk cache under ``~/.claude/statusline/``:
 
   • ``models_dev.json`` — compacted from https://models.dev/api.json into a
     flat ``{model_id_casefold: price_block}`` map already in our
     ``*_per_1m`` schema (plus ``tiers`` for context-length pricing).
-  • ``fx_rates.json``   — units of currency per 1 USD.
+    models.dev 只有美元价，所以这里的一切都是 USD；本工具不做汇率换算。
 
 Refresh policy
 --------------
@@ -37,11 +37,9 @@ from . import __version__
 
 _CACHE_DIR = Path.home() / ".claude" / "statusline"
 _MODELS_PATH = _CACHE_DIR / "models_dev.json"
-_FX_PATH = _CACHE_DIR / "fx_rates.json"
 _LOCK_PATH = _CACHE_DIR / ".catalog_refresh.lock"
 
 _MODELS_URL = "https://models.dev/api.json"
-_FX_URL = "https://open.er-api.com/v6/latest/USD"
 
 _TTL = 86400
 _RETRY_BACKOFF = 3600
@@ -119,17 +117,6 @@ def models() -> dict[str, dict]:
     found = data.get("models") if data else None
     return found if isinstance(found, dict) else {}
 
-
-def fx_rates() -> dict | None:
-    """Return the fetched ``{currency: units_per_usd}`` map, or ``None``."""
-    if not _enabled():
-        return None
-    data = _load_json(_FX_PATH)
-    rates = data.get("rates") if data else None
-    return rates if isinstance(rates, dict) and rates else None
-
-
-# ── models.dev compaction ─────────────────────────────────────────────────
 
 def _rates(src: dict) -> dict | None:
     if not isinstance(src.get("input"), (int, float)) or not isinstance(src.get("output"), (int, float)):
@@ -233,21 +220,10 @@ def refresh_models(force: bool = False) -> bool:
     return True
 
 
-def refresh_fx() -> bool:
-    _, body, _ = _http_get(_FX_URL)
-    rates = json.loads(body).get("rates")
-    if not isinstance(rates, dict):
-        return False
-    clean = {k.upper(): float(v) for k, v in rates.items() if isinstance(v, (int, float)) and v > 0}
-    _write_json(_FX_PATH, {"fetched_at": int(time.time()), "source": _FX_URL, "rates": clean})
-    return True
-
-
 def refresh(force: bool = False) -> dict[str, bool | None]:
     """Refresh stale caches (all with ``force``). ``None`` = skipped (fresh)."""
     results: dict[str, bool | None] = {}
-    jobs = (("models", _MODELS_PATH, lambda: refresh_models(force)),
-            ("fx", _FX_PATH, refresh_fx))
+    jobs = (("models", _MODELS_PATH, lambda: refresh_models(force)),)
     for name, path, fn in jobs:
         if not force and not _stale(path):
             results[name] = None
@@ -276,7 +252,7 @@ def maybe_refresh() -> bool:
     """
     if not _enabled():
         return False
-    if not (_stale(_MODELS_PATH) or _stale(_FX_PATH)):
+    if not _stale(_MODELS_PATH):
         return False
     try:
         if time.time() - _LOCK_PATH.stat().st_mtime < _RETRY_BACKOFF:
@@ -301,9 +277,6 @@ def main() -> None:
     data = _load_json(_MODELS_PATH)
     if data and isinstance(data.get("models"), dict):
         print(f"models.dev entries: {len(data['models'])}")
-    rates = fx_rates()
-    if rates:
-        print(f"USD→CNY: {rates.get('CNY')}")
 
 
 if __name__ == "__main__":

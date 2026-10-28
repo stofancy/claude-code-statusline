@@ -47,11 +47,9 @@ RAW = {
 }
 
 
-def _install_catalog(models: dict | None = None, rates: dict | None = None) -> None:
+def _install_catalog(models: dict | None = None) -> None:
     if models is not None:
         catalog_mod._write_json(catalog_mod._MODELS_PATH, {"fetched_at": 0, "models": models})
-    if rates is not None:
-        catalog_mod._write_json(catalog_mod._FX_PATH, {"fetched_at": 0, "rates": rates})
 
 
 # ── compact ───────────────────────────────────────────────────────────────
@@ -82,7 +80,7 @@ def test_maybe_refresh_spawns_once_then_backs_off(monkeypatch):
 
 
 def test_maybe_refresh_skips_when_fresh(monkeypatch):
-    _install_catalog({}, {"USD": 1.0, "CNY": 7})
+    _install_catalog({})
     spawned = []
     monkeypatch.setattr(catalog_mod, "_spawn_refresh", lambda: spawned.append(1))
     assert catalog_mod.maybe_refresh() is False
@@ -90,7 +88,7 @@ def test_maybe_refresh_skips_when_fresh(monkeypatch):
 
 
 def test_maybe_refresh_after_ttl(monkeypatch):
-    _install_catalog({}, {"USD": 1.0, "CNY": 7})
+    _install_catalog({})
     old = time.time() - 2 * 86400
     os.utime(catalog_mod._MODELS_PATH, (old, old))
     monkeypatch.setattr(catalog_mod, "_spawn_refresh", lambda: None)
@@ -137,4 +135,4 @@ def test_refresh_reports_failure_without_raising(monkeypatch):
         raise OSError("offline")
 
     monkeypatch.setattr(catalog_mod, "_http_get", boom)
-    assert catalog_mod.refresh() == {"models": False, "fx": False}
+    assert catalog_mod.refresh() == {"models": False}

@@ -30,16 +30,9 @@ def call_cost(model_id, at, **usage):
     return cost_mod.fmt_cost_multi({}, model_calls={model_id: [(at, u)]})
 
 
-@pytest.fixture
-def usd(monkeypatch):
-    monkeypatch.setenv("CCS_CURRENCY", "USD")
-
-
-def install_catalog(models=None, rates=None):
+def install_catalog(models=None):
     if models is not None:
         catalog_mod._write_json(catalog_mod._MODELS_PATH, {"models": models})
-    if rates is not None:
-        catalog_mod._write_json(catalog_mod._FX_PATH, {"rates": rates})
 
 
 def write_user_pricing(text):
@@ -70,15 +63,15 @@ def write_user_pricing(text):
     ("grok-4.5", "$0.830"),
     ("grok-4.5-build", "$0.830"),                        # 尾段剥离回到点号键
 ])
-def test_builtin_usd_models(usd, model_id, expected):
+def test_builtin_usd_models(model_id, expected):
     assert last_cost(model_id, **U) == expected
 
 
-def test_anthropic_cache_write_billed(usd):
+def test_anthropic_cache_write_billed():
     assert last_cost("claude-opus-4-8", cache_write=100_000) == "$0.625"
 
 
-def test_anthropic_1h_cache_write_is_2x_input(usd):
+def test_anthropic_1h_cache_write_is_2x_input():
     # 1 小时缓存写入 = 2× 基础输入价（$5 → $10）；只有标记为 1h 的部分按此计
     assert cost_mod.fmt_last_cost("claude-opus-4-8", 0, 0, 0, 100_000, 100_000) == "$1.00"
     assert cost_mod.fmt_last_cost("claude-opus-4-8", 0, 0, 0, 100_000, 40_000) == "$0.775"
@@ -90,7 +83,7 @@ def test_anthropic_1h_cache_write_is_2x_input(usd):
     ("MiniMax-M3.1-Flash", "¥0.510"),
     ("mimo-v2.6-pro", "¥0.903"),
 ])
-def test_builtin_cny_native_models(usd, model_id, expected):
+def test_builtin_cny_native_models(model_id, expected):
     assert last_cost(model_id, **U) == expected
 
 
@@ -123,7 +116,7 @@ def test_tide_mixed_calls_priced_individually():
 
 # ── 上下文长度分档 ────────────────────────────────────────────────────────
 
-def test_tier_selected_per_call(usd):
+def test_tier_selected_per_call():
     small = dict(input=100_000, output=0, cache_read=0, cache_write=0)
     big = dict(input=300_000, output=0, cache_read=0, cache_write=0)
     # 0.1M × $2 + 0.3M × $4
@@ -131,7 +124,7 @@ def test_tier_selected_per_call(usd):
     assert out == "$1.40"
 
 
-def test_tier_counts_cached_prompt(usd):
+def test_tier_counts_cached_prompt():
     # prompt = 15 万输入 + 10 万缓存读取 = 25 万 > 20 万 → $4 / $1
     assert last_cost("grok-4.6", input=150_000, cache_read=100_000) == "$0.700"
 
@@ -149,21 +142,21 @@ CATALOG = {
     ("claude-opus-5-5[1m]", "$2.42"),  # 目录里的新模型，不再被剥离成 claude-opus-5
     ("claude-opus-5", "$1.83"),        # 同名时目录覆盖内置普通条目
 ])
-def test_catalog_price_wins(usd, model_id, expected):
+def test_catalog_price_wins(model_id, expected):
     install_catalog(CATALOG)
     assert last_cost(model_id, **U) == expected
 
 
-def test_without_catalog_new_model_falls_back_to_builtin_prefix(usd):
+def test_without_catalog_new_model_falls_back_to_builtin_prefix():
     assert last_cost("claude-opus-5-5", **U) == "$3.05"
 
 
-def test_catalog_does_not_override_cny_native_entry(usd):
+def test_catalog_does_not_override_cny_native_entry():
     install_catalog(CATALOG)
     assert last_cost("MiniMax-M3", **U).startswith("¥")
 
 
-def test_pricing_api_disabled_ignores_catalog(usd, monkeypatch):
+def test_pricing_api_disabled_ignores_catalog(monkeypatch):
     install_catalog(CATALOG)
     monkeypatch.setenv("CCS_PRICING_API", "0")
     assert last_cost("claude-opus-5-5", **U) == "$3.05"
@@ -171,14 +164,14 @@ def test_pricing_api_disabled_ignores_catalog(usd, monkeypatch):
 
 # ── 用户 pricing.yaml 与汇率 ──────────────────────────────────────────────
 
-def test_user_entry_beats_catalog_and_builtin_stays_available(usd):
+def test_user_entry_beats_catalog_and_builtin_stays_available():
     install_catalog(CATALOG)
     write_user_pricing("providers:\n  mine:\n    claude-opus-5-5:\n      input_per_1m: 10\n      output_per_1m: 10\n")
     assert last_cost("claude-opus-5-5", input=100_000) == "$1.00"
     assert last_cost("claude-opus-4-8", **U) == "$3.05"  # 用户文件没写的模型仍走内置表
 
 
-def test_user_entry_shadows_proxy_prefix_match(usd):
+def test_user_entry_shadows_proxy_prefix_match():
     write_user_pricing("providers:\n  mine:\n    openrouter/claude-opus-4-8:\n      input_per_1m: 99.99\n      output_per_1m: 1\n")
     assert last_cost("openrouter/claude-opus-4-8", input=100_000) == "$10.00"
 
@@ -191,16 +184,16 @@ def test_user_entry_shadows_proxy_prefix_match(usd):
     ("newapi/deepseek-v4-flash-v2", "¥1.00"),   # 前缀 + 版本后缀组合
     ("deepseek-v4-flash-newapi", "¥1.00"),      # 仅后缀
     ("openrouter/deepseek/deepseek-v4-flash", "¥1.00"),
-    ("openrouter/deepseek/deepseek-chat-v3", "¥1.05"),  # 前缀 + 版本，旧链会落到默认价
+    ("openrouter/deepseek/deepseek-chat-v3", "$0.146"),  # 前缀 + 版本；chat 是美元 flat 条目
     ("newapi/deepseek_v4_flash", "¥1.00"),      # 下划线拼写：仅 token 模糊匹配可达
     ("newapi/deepseek.v4.flash", "¥1.00"),      # 点号分隔：同上
-    ("weihub/kimi-k2.7-code", "¥3.69"),         # 转售条目已废弃，前缀剥离后走官方价
+    ("weihub/kimi-k2.7-code", "$0.514"),        # 转售条目已废弃，前缀剥离后走官方美元价
 ])
 def test_variant_ids_match_base_model(model_id, expected):
     assert call_cost(model_id, PEAK_AT, **U) == expected
 
 
-def test_version_veto_blocks_cross_generation(usd):
+def test_version_veto_blocks_cross_generation():
     # 用户表里只有 v3 变体：v4 请求必须拒绝它，落到内置 v4 价格
     write_user_pricing(
         "providers:\n  mine:\n    myvllm-deepseek-v3-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
@@ -210,7 +203,7 @@ def test_version_veto_blocks_cross_generation(usd):
     assert last_cost("newapi/myvllm-deepseek-v3-flash-preview", input=100_000) == "$10.00"
 
 
-def test_patterns_rule_overrides_exact_chain(usd):
+def test_patterns_rule_overrides_exact_chain():
     write_user_pricing(
         "providers:\n  mine:\n    my-cheap-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
         "patterns:\n"
@@ -224,39 +217,34 @@ def test_patterns_rule_overrides_exact_chain(usd):
     assert call_cost("deepseek-v4-pro", PEAK_AT, input=100_000) == "¥0.900"
 
 
-# ── 币种规则：有人民币价就按人民币算，没有才用美元价 ──────────────────────
+# ── 币种规则：按厂商发布币种显示，不做汇率换算 ──────────────────────────
 
 @pytest.mark.parametrize("entry_yaml, expected", [
-    # 双币种：CNY 块优先，显示 ¥（USD 写在前面也一样）
+    # 双币种：CNY 块优先（USD 写在前面也一样）
     ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
      "        CNY:\n          input_per_1m: 100\n          output_per_1m: 0\n", "¥10.00"),
     # 块顺序无关
     ("      prices:\n        CNY:\n          input_per_1m: 50\n          output_per_1m: 0\n"
      "        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "¥5.00"),
-    # 只有美元价：回退美元价，再按汇率显示为 ¥
-    ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "¥7.18"),
+    # 只有美元价：原样按美元显示，没有折算
+    ("      prices:\n        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n", "$1.00"),
 ])
-def test_cny_price_preferred_over_usd(entry_yaml, expected):
+def test_cny_block_preferred_otherwise_usd(entry_yaml, expected):
     write_user_pricing("providers:\n  mine:\n    my-model-x:\n" + entry_yaml)
     assert last_cost("my-model-x", input=100_000) == expected
 
 
-def test_usd_price_kept_when_display_is_usd(usd):
-    write_user_pricing(
-        "providers:\n  mine:\n    my-model-y:\n      prices:\n"
-        "        USD:\n          input_per_1m: 10\n          output_per_1m: 0\n"
-    )
-    assert last_cost("my-model-y", input=100_000) == "$1.00"
+def test_usd_model_never_relabelled_as_cny():
+    # Claude 没有人民币定价，就显示美元；不会出现 ¥ 符号
+    assert last_cost("claude-opus-5", **U) == "$3.05"
+    assert last_cost("gpt-5", **U) == "$1.14"
 
 
-@pytest.mark.parametrize("fetched, user_pin, expected", [
-    (None, None, "¥21.90"),   # 内置快照 7.18
-    (6.5, None, "¥19.82"),    # 每日拉取的汇率
-    (6.5, 7.0, "¥21.35"),     # 用户 pricing.yaml 钉住的汇率优先
-])
-def test_fx_precedence(fetched, user_pin, expected):
-    if fetched is not None:
-        install_catalog(rates={"USD": 1.0, "CNY": fetched})
-    if user_pin is not None:
-        write_user_pricing(f"fx_rates:\n  CNY: {user_pin}\n")
-    assert last_cost("claude-opus-4-8", **U) == expected
+def test_mixed_currencies_render_as_segments():
+    # 人民币模型 + 美元模型：按币种分别求和，不做折算
+    one_m = dict(input=1_000_000, output=0, cache_read=0, cache_write=0)
+    calls = {
+        "deepseek-v4-pro": [(PEAK_AT, one_m)],
+        "claude-opus-5": [(PEAK_AT, one_m)],
+    }
+    assert cost_mod.fmt_cost_multi({}, model_calls=calls) == "¥9.00 + $5.00"

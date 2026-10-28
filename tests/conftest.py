@@ -18,11 +18,9 @@ def _isolate_pricing(monkeypatch, tmp_path):
     home = tmp_path / "ccs_home"
     monkeypatch.setattr(cost_mod, "_USER_PRICING", home / "pricing.yaml")
     monkeypatch.setattr(catalog_mod, "_MODELS_PATH", home / "models_dev.json")
-    monkeypatch.setattr(catalog_mod, "_FX_PATH", home / "fx_rates.json")
     monkeypatch.setattr(catalog_mod, "_LOCK_PATH", home / ".catalog_refresh.lock")
     monkeypatch.setattr(catalog_mod, "_spawn_refresh", lambda: None)
     monkeypatch.delenv("CCS_PRICING_API", raising=False)
-    monkeypatch.delenv("CCS_CURRENCY", raising=False)
     cost_mod._pricing_cache = None
     cost_mod._pricing_key = None
     yield

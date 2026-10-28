@@ -12,7 +12,7 @@
 Claude Code 内置的 `cost.total_cost_usd` 假定使用 Anthropic USD 定价。如果你使用 DeepSeek（¥/CNY）、Gemini 或 OpenAI，内置成本数据毫无意义。更关键的是，`context_window.total_input_tokens` 在每次 context compaction 后会重置，使得增量 snapshot-diff 累积变得不可靠。本工具：
 
 - 直接解析 Claude Code **磁盘上的 JSONL transcript**，获取权威 token 计数
-- 使用 **实际提供商定价表** 计算成本（多币种、按模型）
+- 使用 **实际提供商定价表** 计算成本（按模型、按厂商发布币种）
 - 将 **缓存命中率** 显示为标准的 0–100% 指标
 - 检测并显示 **压缩次数**（TURNS 上的 `cN` 后缀）
 - 估算 **下一轮重播令牌数**，在上下文溢出前发出预警
@@ -191,16 +191,16 @@ command = '"/path/to/python" -m ccs.codex_statusline'
 
 ## 定价
 
-美元标价每天从 [models.dev](https://models.dev) 拉取，汇率每天从 open.er-api.com 拉取，均由后台独立进程完成（状态行从不等待网络；缓存位于 `~/.claude/statusline/models_dev.json` 与 `fx_rates.json`）。手动刷新：`python -m ccs.catalog --force`。
+美元标价每天从 [models.dev](https://models.dev) 拉取，由后台独立进程完成（状态行从不等待网络；缓存位于 `~/.claude/statusline/models_dev.json`）。手动刷新：`python -m ccs.catalog --force`。
 
 内置定价表 `src/ccs/pricing.yaml` 保存 models.dev 无法表达的信息——人民币原生价、DeepSeek 峰谷价、自定义分档——这些条目优先；普通美元条目仅作离线兜底。`~/.claude/statusline/pricing.yaml` 叠加在内置表之上且始终优先（只写部分条目即可）。按上下文长度分档（`tiers: [{above: N, ...}]`）逐次调用精确计价。
 
 第三方网关的模型 id 由三层匹配落到表内键：`pricing.yaml` 的 `patterns:` glob 规则（显式覆盖，首个命中生效）→ 精确链（任意组合地剥离 `[1m]` 缓存后缀、点号版本、网关前缀与变体/版本后缀，如 `newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`）→ [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` 匹配（只在该 id 的 token 全覆盖的键里评分；带 id 缺失版本的键、以及不同代的键直接排除，`v3` 请求不会借用 `v4` 的价格）。三者都不命中的 id 用默认价，并在 `CCS_DEBUG=1` 时写入 debug 日志。
 
-币种规则：模型**有人民币价（`prices.CNY`）就按人民币价计算**（条目不再声明 `currency`，用哪个块计价就按哪个币种显示）；没有人民币价时才回退美元价，美元价再经 `fx_rates` 换算成显示币种。
+币种规则：模型**有人民币价（`prices.CNY`）就按人民币价计算**，否则用美元价。全程没有汇率换算：人民币模型显示 `¥`，美元模型显示 `$`，混合会话的 `TOTAL` 按币种分段显示（`¥12.35 + $4.56`）。
 
 下表是 **2026-10-28 逐家核对的官方标价**，单位每百万 tokens，币种按各厂商发布口径
-（国内厂商为 ¥ 原生价，其余为 $）。美元价模型在显示时按汇率换算，人民币价不换算。
+（国内厂商为 ¥ 原生价，其余为 $）。两边都不做汇率换算。
 
 | 提供商 | 模型 | 输入 | 缓存命中 | 输出 | 币种 |
 |----------|-------|-------|-----------|--------|------|
@@ -261,7 +261,7 @@ Claude Code statusline tick (every 15s) → ccs-statusline
 | `renderer.py` | — | 256 色条、token 格式化、双行布局 |
 | `util.py` | — | 共享 stdin JSON 读取器 |
 | `pricing.yaml` | — | 可配置的提供商定价表 |
-| `catalog.py` | — | models.dev 价格目录 + 每日汇率（后台刷新） |
+| `catalog.py` | — | models.dev 价格目录（后台刷新） |
 
 ### Token 统计原理
 
@@ -298,13 +298,12 @@ Claude Code 将子代理的 API 调用存储在 `subagents/agent-*.jsonl` 文件
 | `CCS_DEBUG=1` | 将原始 hook 数据写入 `~/.claude/statusline/debug.log` |
 | `CCS_USAGE_API=0` | 关闭官方 `/api/oauth/usage` 查询（Pro/Max 的 stdin 5H/7D 窗口仍显示） |
 | `CCS_USAGE_TTL` | 官方用量缓存刷新间隔（秒，最低 `180`，默认 `300`） |
-| `CCS_PRICING_API` | `0` 关闭 models.dev 价格目录与每日汇率拉取 |
+| `CCS_PRICING_API` | `0` 关闭 models.dev 价格目录 |
 | `CLAUDE_CODE_OAUTH_TOKEN` | 显式提供 OAuth token；否则自动从凭证文件 / 钥匙串读取 |
 | `CCS_BALANCE_API=0` | 关闭提供商余额/额度/配额查询 |
 | `CCS_BALANCE_TTL` | 提供商余额缓存刷新间隔（秒，最低 `180`，默认 `300`） |
 | `DEEPSEEK_API_KEY` / `OPENAI_SESSION_KEY` / `MINIMAX_API_KEY` | `BAL` 余额段的提供商凭证 |
 | `CCS_LANG` | 界面语言——`en`（默认）或 `zh`；未设时回落到 `$LANG`/`$LC_ALL` |
-| `CCS_CURRENCY` | 覆盖显示币种（有人民币价按人民币计价，否则美元价经 `fx_rates` 换算） |
 
 ## 数据库
 

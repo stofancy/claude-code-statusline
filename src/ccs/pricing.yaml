@@ -11,37 +11,28 @@
 #
 # Per-model currency
 # ------------------
+# 不存在汇率换算，也没有 `display_currency` / `fx_rates`。每个模型按厂商发布
+# 的币种显示：人民币定价的显示 ¥，美元定价的显示 $。混合会话的 TOTAL 按币种
+# 分段（`¥12.35 + $4.56`），不做折算。
+#
 # A model block carries either a multi-currency `prices:` map
-# (`prices.CNY`, `prices.USD`, …) or a legacy flat dict (priced in
-# `base_currency`, i.e. USD). There is no `currency:` field — the block
-# that is used decides the currency.
+# (`prices.CNY`, `prices.USD`) or a legacy flat dict (USD). There is no
+# `currency:` field — the block that is used decides the currency.
 #
 # Resolution order at lookup time — **人民币优先，无人民币价回退美元**:
-#   1. `prices.CNY`               — 有人民币价就按人民币计价
-#   2. `prices[base_currency]`    — 无 CNY 块时回退（默认 USD）
-#   3. `prices[display_currency]` — 用户显示币种
-#   4. 首个可用块                 — 最后兜底
-# 用哪个块计价就按哪个币种显示（CNY 计价显示 ¥，不经过汇率）；用非 CNY 块
-# 计价时才经 `fx_rates` 换算成显示币种。
-#
-# `base_currency` is the FX pivot (USD by default). `display_currency`
-# defaults to **CNY** so the status line shows ¥ — the convention for
-# Chinese-speaking users. Override at runtime with env CCS_CURRENCY
-# (e.g. `CCS_CURRENCY=USD`) or by setting `display_currency` in a
-# user-level `~/.claude/statusline/pricing.yaml`. FX rates are in
-# `fx_rates` below, expressed as *units of currency per 1 USD*.
+#   1. `prices.CNY`  — 有人民币价就按人民币计价（显示 ¥）
+#   2. `prices.USD`  — 无 CNY 块时用美元块（显示 $）
+#   3. 首个可用块    — 最后兜底
+#   4. flat dict     — 旧格式，按美元
 #
 # Relationship to models.dev (ccs/catalog.py)
 # -------------------------------------------
-# USD list prices are also fetched daily from https://models.dev, and FX
-# rates daily from open.er-api.com. Per model id:
-#   • entries with `currency` / `prices` / `tide` / `tiers`
+# USD list prices are also fetched daily from https://models.dev. Per model id:
+#   • entries with `prices` / `tide` / `tiers`
 #     (and everything in the user's pricing.yaml) always win — they encode
 #     what models.dev cannot (native CNY prices, 峰谷, custom tiers);
 #   • otherwise models.dev wins, and plain USD entries here are only the
 #     offline fallback.
-# `fx_rates` below is likewise only the fallback for the fetched rates;
-# `fx_rates` in the user's pricing.yaml pins a rate.
 #
 # Context-length tiers: `tiers: [{above: N, <rates>}]` — a call whose prompt
 # (input + cache_read + cache_write) exceeds N tokens is billed at that tier.
@@ -67,24 +58,6 @@
 #   patterns:
 #     - match: "*deepseek-v4-flash*"   # case-insensitive glob
 #       use: deepseek-v4-flash         # any key already in this table
-
-base_currency: USD
-display_currency: CNY
-
-fx_rates:
-  USD: 1.0
-  CNY: 7.18
-  EUR: 0.92
-  GBP: 0.79
-  JPY: 156.0
-  AUD: 1.52
-  INR: 83.5
-  HKD: 7.82
-  SGD: 1.34
-  KRW: 1370.0
-  CAD: 1.37
-  CHF: 0.88
-  TWD: 32.3
 
 providers:
 

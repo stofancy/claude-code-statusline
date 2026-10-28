@@ -5,31 +5,29 @@ per-model token breakdowns from ``model_usage`` (not ratio-based estimation).
 
 Currency model
 --------------
-**人民币优先：有人民币价就按人民币计价，没有才用美元价。** A model block
-publishes prices either as a multi-currency ``prices`` map or as a legacy
-flat dict (which is priced in ``base_currency``)::
+**不做汇率换算，按厂商发布的币种显示。** 人民币定价的模型显示 ¥，美元定价的
+模型显示 $，都是厂商自己的标价。聚合时同一币种分别求和，混合币种按
+``¥12.35 + $4.56`` 分段显示 —— 不发明汇率、不把美元价贴成人民币。
+
+A model block publishes prices either as a multi-currency ``prices`` map or
+as a legacy flat dict (USD)::
 
     minimax:
       MiniMax-M3:
         prices:
           CNY: { input_per_1m: 2.10, output_per_1m: 8.40, ... }
-          USD: { input_per_1m: 0.29, output_per_1m: 1.17, ... }
 
-There is no ``currency`` field: the block that gets used decides both the
-computation currency and the symbol shown.
+    openai:
+      gpt-5:                 # flat dict = 美元
+        input_per_1m: 1.25
+        output_per_1m: 10.00
 
 Resolution order for the *active* price block:
 
-  1. ``prices["CNY"]`` — 人民币块，只要存在就用它，精确无 FX。
-  2. ``prices[base_currency]`` — 无 CNY 块时回退（默认 USD）。
-  3. ``prices[display_currency]`` — 用户显示币种。
-  4. First available key in ``prices`` — last-resort fallback.
-  5. Flat dict (legacy) — priced in ``base_currency``.
-
-The **display currency** follows the block that was used: 用人民币块计价就
-显示 ¥（原生价，不经汇率）；用其它币种计价则经 ``fx_rates`` 换算成
-``display_currency``。Costs priced in different currencies are FX-converted
-into ``display_currency`` when summed by :func:`fmt_cost_multi`.
+  1. ``prices["CNY"]`` — 人民币块，存在即用。
+  2. ``prices["USD"]`` — 美元块。
+  3. First available key in ``prices`` — last-resort fallback.
+  4. Flat dict (legacy) — USD.
 """
 
 import os
@@ -97,6 +95,8 @@ _TOKEN_SPLIT_RE = re.compile(r"[/\-_.\s]+")
 _VERSION_TOKEN_RE = re.compile(r"v?\d+(?:[._]\d+)*", re.IGNORECASE)
 
 # pricing.yaml 的顶层配置键，不是模型条目，模糊匹配枚举时要跳过。
+# 币种设置键（fx_rates / base_currency / display_currency / default_currency）
+# 已经退役，仍列在这里只是为了不把老用户文件里的残留键当成模型名。
 _SETTING_KEYS = frozenset({
     "providers", "patterns", "fx_rates",
     "base_currency", "display_currency", "default_currency",
@@ -124,7 +124,6 @@ _yaml_cache: dict[Path, tuple[float, dict]] = {}
 _pricing_cache: dict | None = None
 _pricing_key: tuple | None = None
 _user_entry_ids: set[int] = set()
-_user_fx_rates: dict = {}
 _unresolved_logged: set[str] = set()
 _matched_logged: set[str] = set()
 
@@ -166,7 +165,7 @@ def _load_pricing() -> dict:
     from the user file are recorded in ``_user_entry_ids`` so they always win
     over models.dev.
     """
-    global _pricing_cache, _pricing_key, _user_entry_ids, _user_fx_rates
+    global _pricing_cache, _pricing_key, _user_entry_ids
 
     user_mtime, user = _read_yaml(_USER_PRICING)
     builtin_mtime, builtin = _read_yaml(_BUILTIN_PRICING)
@@ -191,10 +190,9 @@ def _load_pricing() -> dict:
     user_ids = {id(e) for cfg in user_providers.values() if isinstance(cfg, dict)
                 for e in _iter_model_entries(cfg)}
     user_ids |= {id(v) for k, v in user.items()
-                 if k not in ("providers", "fx_rates") and isinstance(v, dict)}
+                 if k not in _SETTING_KEYS and isinstance(v, dict)}
 
     _user_entry_ids = user_ids
-    _user_fx_rates = user.get("fx_rates") or {}
     _pricing_cache = merged
     _pricing_key = key
     return _pricing_cache
@@ -533,22 +531,15 @@ def _candidate_ids(model_id: str) -> list[str]:
 
 def _resolve_price(
     model_id: str,
-    display_currency: str,
-    base_currency: str,
     at_ts: str | None = None,
     prompt_tokens: int | None = None,
-) -> tuple[dict, str, str]:
-    """Return ``(price_dict, price_currency, target_display_currency)``.
+) -> tuple[dict, str]:
+    """Return ``(price_dict, currency)`` — no currency conversion anywhere.
 
-    The three return values:
-
-    * ``price_dict``        — the resolved price block (after the
-      ``prices``-map selection rules below).
-    * ``price_currency``    — the ISO code of the currency the price block
-      is denominated in (``CNY`` when the model has a renminbi block).
-    * ``target_display_currency`` — the currency to render this model's
-      cost in: ``CNY`` when it was priced in CNY, else the configured
-      ``display_currency``.
+    ``currency`` is the currency the resolved block is denominated in:
+    ``CNY`` when the model has a renminbi block, ``USD`` otherwise
+    (models.dev and flat YAML entries are USD). The cost is rendered in
+    that currency, exactly as the vendor publishes it.
 
     Source precedence per candidate id (most specific first, so a new
     ``claude-opus-5-5`` found on models.dev is not shadowed by the older
@@ -574,44 +565,30 @@ def _resolve_price(
     selected = _select_entry(model_id, pricing)
     if selected is None:
         _debug_unresolved(model_id)
-        return _DEFAULT_PRICING, base_currency, base_currency
+        return _DEFAULT_PRICING, "USD"
     entry, remote = selected
 
     if remote:
-        # models.dev 一律 USD 标价，与 base_currency 设置无关
-        return _select_tier_block(entry, prompt_tokens), "USD", display_currency
+        # models.dev 一律美元标价
+        return _select_tier_block(entry, prompt_tokens), "USD"
 
-    price, price_currency = _select_price_block(entry, base_currency, display_currency)
+    price, price_currency = _select_price_block(entry)
     tide = entry.get("tide")
     if isinstance(tide, dict):
         price = _select_tide_block(price, tide, at_ts)
-    price = _select_tier_block(price, prompt_tokens)
-    # 用哪个块计价就按哪个币种显示：人民币块原生显示 ¥，其它币种换算成显示币种。
-    target = "CNY" if price_currency == "CNY" else display_currency
-    return price, price_currency, target
+    return _select_tier_block(price, prompt_tokens), price_currency
 
 
-def _select_price_block(
-    entry: dict,
-    base_currency: str,
-    display_currency: str,
-) -> tuple[dict, str]:
-    """Pick the price block to compute the cost from.
+def _select_price_block(entry: dict) -> tuple[dict, str]:
+    """Pick the price block and its currency.
 
-    Currency rule: **CNY first, USD as the fallback.** The cost of a model
-    is computed from its renminbi block whenever one exists; only models
-    without a CNY block are priced in USD (and FX-converted for display).
+    Resolution order:
 
-    Multi-currency ``prices`` map (resolution order):
+      1. ``prices["CNY"]`` — 人民币块，存在即用。
+      2. ``prices["USD"]`` — 美元块。
+      3. First available key — last-resort fallback.
 
-      1. ``prices["CNY"]`` — 人民币块，存在即用（主计价币种）。
-      2. ``prices[base_currency]`` — 无 CNY 块时回退（默认 USD）。
-      3. ``prices[display_currency]`` — 用户显示币种。
-      4. First available key — last-resort fallback.
-
-    Legacy flat dict (no ``prices`` key):
-
-      • Use as-is, priced in ``base_currency``.
+    Flat dict (no ``prices`` key) is a legacy entry priced in USD.
 
     A currency block may be a *tide container* — ``{peak: {...},
     off_peak: {...}}`` — for peak/off-peak pricing (DeepSeek 峰谷).
@@ -620,63 +597,19 @@ def _select_price_block(
     """
     prices_map = entry.get("prices")
     if isinstance(prices_map, dict) and prices_map:
-        for cur in ("CNY", base_currency, display_currency):
+        for cur in ("CNY", "USD"):
             block = prices_map.get(cur)
             if isinstance(block, dict):
                 return block, cur
         for cur, block in prices_map.items():
             if isinstance(block, dict):
                 return block, cur
-        # Malformed prices map — fall through to flat treatment.
 
-    return entry, base_currency
-
-
-def _currency_settings() -> tuple[str, str, dict]:
-    """Return ``(base_currency, display_currency, fx_rates)``.
-
-    Display currency precedence (highest first):
-      1. ``CCS_CURRENCY`` env var
-      2. ``display_currency`` in YAML
-      3. ``default_currency`` in YAML (legacy alias)
-      4. ``base_currency`` itself
-
-    FX rate precedence (per currency, highest first): ``fx_rates`` in the
-    user's ``pricing.yaml`` → daily-fetched rates (:mod:`ccs.catalog`) →
-    builtin ``fx_rates`` snapshot.
-    """
-    pricing = _load_pricing()
-    base = (pricing.get("base_currency") or "USD").upper()
-
-    display = (os.getenv("CCS_CURRENCY")
-               or pricing.get("display_currency")
-               or pricing.get("default_currency")
-               or base).upper()
-
-    fx_rates = dict(pricing.get("fx_rates") or {})
-    fx_rates.update(catalog.fx_rates() or {})
-    fx_rates.update(_user_fx_rates)
-    return base, display, fx_rates
+    return entry, "USD"
 
 
 def _symbol_for(currency: str) -> str:
     return _CURRENCY_SYMBOLS.get(currency, currency + " ")
-
-
-def _fx_convert(amount: float, from_cur: str, to_cur: str, fx_rates: dict) -> float:
-    """Convert ``amount`` from ``from_cur`` to ``to_cur`` using ``fx_rates``.
-
-    Rates express *units of currency per 1 USD* (USD is implicitly 1.0).
-    So 1 CNY = (1 / 7.18) USD = (USD_rate / CNY_rate) in display currency
-    when target is USD, or analogously for any pair.
-    """
-    if from_cur == to_cur:
-        return amount
-    from_rate = float(fx_rates.get(from_cur, 1.0))
-    to_rate = float(fx_rates.get(to_cur, 1.0))
-    if from_rate <= 0:
-        from_rate = 1.0
-    return amount * (to_rate / from_rate)
 
 
 def _per_1m(price: float, tokens: int) -> float:
@@ -733,27 +666,13 @@ def fmt_cost_multi(
 ) -> str:
     """Render the cumulative cost string for a per-model usage breakdown.
 
-    Two independent grouping dimensions are kept separate:
+    Costs are summed per currency: ``{CNY: ..., USD: ...}``. One currency →
+    one number (``¥12.35``); several → segments joined by `` + ``
+    (``¥12.35 + $4.56``). No exchange rate is applied, so a USD-priced model
+    never shows up as a dollar figure relabelled with ``¥``.
 
-    * **Price currency** (from the resolved ``prices`` block) drives the
-      unit math — we don't invent prices in currencies the model doesn't
-      publish. If the chosen block is in USD but display wants CNY, we
-      apply FX rather than fabricate a number.
-    * **Target display currency** (the model's declared ``currency`` if
-      set, else the user's ``display_currency``) drives the *output*
-      symbol. This is the currency the user actually sees.
-
-    The optional ``primary_model_id`` selects which target currency wins
-    when the breakdown contains models with different targets. Pass the
-    model id from the statusline's stdin JSON — that is the model the
-    user is *currently* chatting with, so its declared currency is the
-    currency the user thinks in. Subagents using a different currency
-    are FX-converted into the primary's currency, not the other way
-    around. This keeps ``TOTAL`` and ``LAST`` consistent on the same
-    line: both reflect the primary model's native price.
-
-    When ``primary_model_id`` is omitted, the breakdown is aggregated
-    into the user's ``display_currency`` (the legacy behavior).
+    ``primary_model_id`` is unused for currency purposes (kept for call-site
+    compatibility); it no longer picks a winning currency.
 
     **Per-call precision (tide models):** pass ``model_calls`` as
     ``{model_id: [(iso_ts, usage), ...]}`` to price each API call with
@@ -768,20 +687,12 @@ def fmt_cost_multi(
     if not model_breakdown and not model_calls:
         return "-"
 
-    base, display, fx_rates = _currency_settings()
-
-    # Sum per model: compute cost in price_currency, then FX-convert to
-    # the model's target display currency. Group by target so we can tell
-    # whether aggregation can be done in one currency or must FX-mix.
-    by_target: dict[str, float] = {}
+    by_currency: dict[str, float] = {}
 
     def _acc_cost(model_id: str, usage: dict, at_ts: str | None, prompt: int | None) -> None:
-        price, price_currency, target = _resolve_price(
-            model_id, display, base, at_ts=at_ts, prompt_tokens=prompt)
-        cost = _model_cost_in_native(price, usage)
-        if price_currency != target:
-            cost = _fx_convert(cost, price_currency, target, fx_rates)
-        by_target[target] = by_target.get(target, 0.0) + cost
+        price, currency = _resolve_price(
+            model_id, at_ts=at_ts, prompt_tokens=prompt)
+        by_currency[currency] = by_currency.get(currency, 0.0) + _model_cost_in_native(price, usage)
 
     if model_calls:
         for model_id, calls in model_calls.items():
@@ -791,40 +702,21 @@ def fmt_cost_multi(
         for model_id, usage in model_breakdown.items():
             _acc_cost(model_id, usage, None, None)
 
-    if not by_target:
+    if not by_currency:
         return "-"
 
-    # Single target: the breakdown sums to one currency already. Render
-    # directly in that currency — no FX, no need for the caller to
-    # identify a primary model. This is the path that makes
-    # ``fmt_cost_multi({"MiniMax-M3": ...})`` show ¥ even without
-    # ``primary_model_id``.
-    if len(by_target) == 1:
-        target, total = next(iter(by_target.items()))
-        return _fmt_cost_val(_symbol_for(target), total)
-
-    # Mixed targets: the caller must tell us which target wins, otherwise
-    # we fall back to the user's ``display_currency``. With
-    # ``primary_model_id`` set, that model's target becomes the
-    # aggregation currency — keeping ``TOTAL`` and ``LAST`` consistent
-    # on the same line when subagents use a different currency.
-    if primary_model_id:
-        _, _, display_target = _resolve_price(primary_model_id, display, base)
-    else:
-        display_target = display
-
-    total = 0.0
-    for target, cost in by_target.items():
-        if target != display_target:
-            cost = _fx_convert(cost, target, display_target, fx_rates)
-        total += cost
-    return _fmt_cost_val(_symbol_for(display_target), total)
+    # 稳定顺序：人民币在前，其次美元，其余按字母。
+    order = {"CNY": 0, "USD": 1}
+    parts = [
+        _fmt_cost_val(_symbol_for(cur), total)
+        for cur, total in sorted(by_currency.items(), key=lambda kv: (order.get(kv[0], 2), kv[0]))
+    ]
+    return " + ".join(parts)
 
 
 def fmt_usd(amount: float) -> str:
-    """Render a USD amount (e.g. Claude Code's own cost total) in the display currency."""
-    _, display, fx_rates = _currency_settings()
-    return _fmt_cost_val(_symbol_for(display), _fx_convert(amount, "USD", display, fx_rates))
+    """Render a USD amount (e.g. Claude Code's own cost total)."""
+    return _fmt_cost_val("$", amount)
 
 
 def fmt_last_cost(
@@ -835,17 +727,7 @@ def fmt_last_cost(
     per_call_cache_write: int = 0,
     per_call_cache_write_1h: int = 0,
 ) -> str:
-    """Cost of the most recent turn for a single model.
-
-    The cost is computed in the model's resolved price currency, then
-    FX-converted (if needed) to the model's *target display currency*:
-
-      • If the model declares ``currency: X``, the LAST line shows in
-        ``X`` — the user always sees the per-model native price.
-      • If no ``currency`` field is set, the LAST line follows the
-        user's ``display_currency`` (FX from base if they differ).
-    """
-    base, display, fx_rates = _currency_settings()
+    """Cost of the most recent turn for a single model, in its own currency."""
     usage = {
         "input": per_call_input,
         "output": per_call_output,
@@ -853,13 +735,8 @@ def fmt_last_cost(
         "cache_write": per_call_cache_write,
         "cache_write_1h": per_call_cache_write_1h,
     }
-    price, price_currency, target = _resolve_price(
-        model_id, display, base, prompt_tokens=_prompt_tokens(usage))
-    cost_native = _model_cost_in_native(price, usage)
-    if price_currency != target:
-        cost = _fx_convert(cost_native, price_currency, target, fx_rates)
-    else:
-        cost = cost_native
+    price, currency = _resolve_price(model_id, prompt_tokens=_prompt_tokens(usage))
+    cost = _model_cost_in_native(price, usage)
     if cost < 0.0001:
-        return f"{_symbol_for(target)}0"
-    return _fmt_cost_val(_symbol_for(target), cost)
+        return f"{_symbol_for(currency)}0"
+    return _fmt_cost_val(_symbol_for(currency), cost)

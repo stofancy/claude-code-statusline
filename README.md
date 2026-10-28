@@ -12,7 +12,7 @@ Production-grade custom statusline for [Claude Code](https://code.claude.com) op
 Claude Code's built-in `cost.total_cost_usd` assumes Anthropic USD pricing. If you use DeepSeek (¥/CNY), Gemini, or OpenAI, the built-in cost is meaningless. More critically, `context_window.total_input_tokens` resets after each context compaction, making incremental snapshot-diff accumulation unreliable. This tool:
 
 - Parses Claude Code's **on-disk JSONL transcript** directly for authoritative token counts
-- Calculates cost using **actual provider pricing tables** (multi-currency, per-model)
+- Calculates cost using **actual provider pricing tables** (per model, in the vendor's own currency)
 - Shows **cache hit rate** as a proper 0–100% metric
 - Detects and displays **compaction count** (`cN` suffix on turns)
 - Estimates **next-turn replay tokens** to warn before context overflow
@@ -203,10 +203,9 @@ Restart Codex after installation, then review and trust the new hook with
 | Variable | Effect |
 |---|---|
 | `CCS_LANG` | UI language — `en` (default) or `zh`. Falls back to `$LANG`/`$LC_ALL` if unset. |
-| `CCS_CURRENCY` | Display currency — `USD`, `CNY`, `EUR`, `GBP`, `JPY`, `AUD`, `INR`, `HKD`, `SGD`, `KRW`, `CAD`, `CHF`, `TWD`. Overrides `display_currency` in `pricing.yaml`. Prices are computed from the model's CNY block when it has one, from USD otherwise, and converted to this currency via the `fx_rates` block. |
 | `CCS_USAGE_API` | When `0`/`false`, disables the official `/api/oauth/usage` query — only the stdin 5H/7D windows remain. Default on. |
 | `CCS_USAGE_TTL` | Official-usage cache refresh interval in seconds (min `180`, default `300`). |
-| `CCS_PRICING_API` | `0` disables the daily models.dev price catalog and FX-rate fetch (YAML tables only). |
+| `CCS_PRICING_API` | `0` disables the daily models.dev price catalog (YAML tables only). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token for usage queries; otherwise auto-read from `~/.claude/.credentials.json` / macOS keychain. |
 | `CCS_BALANCE_API` | When `0`/`false`, disables provider balance/credits/quota network queries. Default on. |
 | `CCS_BALANCE_TTL` | Provider-balance cache refresh interval in seconds (min `180`, default `300`). |
@@ -221,17 +220,17 @@ Restart Codex after installation, then review and trust the new hook with
 
 ## Pricing
 
-USD list prices are fetched daily from [models.dev](https://models.dev) and FX rates from open.er-api.com, in a detached background process (the status line never waits on it; caches live in `~/.claude/statusline/models_dev.json` and `fx_rates.json`). Run `python -m ccs.catalog --force` to refresh by hand.
+USD list prices are fetched daily from [models.dev](https://models.dev) in a detached background process (the status line never waits on it; the cache lives in `~/.claude/statusline/models_dev.json`). Run `python -m ccs.catalog --force` to refresh by hand.
 
 The built-in table at `src/ccs/pricing.yaml` holds what models.dev cannot express — native CNY prices, DeepSeek peak/off-peak, custom tiers — and those entries win; plain USD entries are only the offline fallback. `~/.claude/statusline/pricing.yaml` is merged on top and always wins (a partial file is fine). Context-length tiers (`tiers: [{above: N, ...}]`) are priced per call.
 
 Model ids from third-party gateways are matched onto a table key by three layers: `patterns:` glob rules in `pricing.yaml` (explicit override, first match wins), then an exact chain that strips `[1m]` cache suffixes, dot versions and proxy prefixes/suffixes in any combination (`newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`), then a [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` match over keys whose tokens all appear in the id (a key carrying a version the id lacks, or a different generation, is rejected — `v3` requests never borrow `v4` prices). Unmatched ids use the default block and are logged with `CCS_DEBUG=1`.
 
-Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`; entries no longer declare a `currency`, the block used decides the symbol), and USD is the fallback for models without a CNY price; USD-priced models are converted into the display currency via `fx_rates`.
+Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`), otherwise from USD. There is no exchange rate anywhere — the cost is displayed in the currency the vendor publishes: `¥` for CNY-priced models, `$` for USD-priced ones. A session mixing both renders `TOTAL` as segments (`¥12.35 + $4.56`).
 
 Prices below are the **official list prices, verified 2026-10-28**, per million tokens, in each vendor's
-own currency (¥ native CNY where published, $ otherwise). USD-priced models are
-FX-converted at display time; CNY-priced models never are.
+own currency (¥ native CNY where published, $ otherwise). No exchange rate is
+applied to either side.
 
 | Provider | Model | Input | Cache hit | Output | Currency |
 |----------|-------|-------|-----------|--------|----------|
@@ -301,7 +300,7 @@ Claude Code statusline tick (every 15s) → ccs-statusline
 | `renderer.py` | — | 256-colour bars, token formatting, 2-line layout |
 | `util.py` | — | Shared stdin JSON reader |
 | `pricing.yaml` | — | Configurable provider pricing table |
-| `catalog.py` | — | Daily models.dev price catalog + FX rates (background refresh) |
+| `catalog.py` | — | Daily models.dev price catalog (background refresh) |
 
 ### How Token Counting Works
 
@@ -338,13 +337,12 @@ Subagents often use a different model (e.g. `deepseek-v4-flash` for subagents vs
 | `CCS_DEBUG=1` | Write raw hook data to `~/.claude/statusline/debug.log` |
 | `CCS_USAGE_API=0` | Disable the official `/api/oauth/usage` query (stdin 5H/7D windows still show) |
 | `CCS_USAGE_TTL` | Official-usage cache refresh interval in seconds (min `180`, default `300`) |
-| `CCS_PRICING_API` | `0` disables models.dev prices + daily FX rates |
+| `CCS_PRICING_API` | `0` disables the models.dev price catalog |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token; otherwise read from credentials file / keychain |
 | `CCS_BALANCE_API=0` | Disable provider balance/credits/quota queries |
 | `CCS_BALANCE_TTL` | Provider-balance cache refresh interval in seconds (min `180`, default `300`) |
 | `DEEPSEEK_API_KEY` / `OPENAI_SESSION_KEY` / `MINIMAX_API_KEY` | Provider credentials for the `BAL` balance segment |
 | `CCS_LANG` | UI language — `en` (default) or `zh`; falls back to `$LANG`/`$LC_ALL` |
-| `CCS_CURRENCY` | Override display currency (converts via `fx_rates` in `pricing.yaml`) |
 
 ## Database
 
