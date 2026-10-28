@@ -190,9 +190,14 @@ def test_variant_ids_match_base_model(model_id, expected):
     assert last_cost(model_id, **U) == expected
 
 
-def test_variant_version_conflict_uses_default_pricing(usd):
-    # 表里只有 v4-flash：v3 请求不得借用 v4 的价格
-    assert last_cost("newapi/deepseek-v3-flash", **U) == "$0.510"
+def test_version_veto_blocks_cross_generation(usd):
+    # 用户表里只有 v3 变体：v4 请求必须拒绝它，落到内置 v4 价格
+    write_user_pricing(
+        "providers:\n  mine:\n    myvllm-deepseek-v3-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
+    )
+    assert last_cost("newapi/myvllm-deepseek-v4-flash-preview", **U) == "¥1.21"
+    # 同代则命中该用户条目（前缀 + 后缀都被吃掉，仅剩版本区分）
+    assert last_cost("newapi/myvllm-deepseek-v3-flash-preview", input=100_000) == "$10.00"
 
 
 def test_patterns_rule_overrides_exact_chain(usd):

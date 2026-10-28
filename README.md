@@ -225,7 +225,7 @@ USD list prices are fetched daily from [models.dev](https://models.dev) and FX r
 
 The built-in table at `src/ccs/pricing.yaml` holds what models.dev cannot express — native CNY prices, DeepSeek peak/off-peak, custom tiers — and those entries win; plain USD entries are only the offline fallback. `~/.claude/statusline/pricing.yaml` is merged on top and always wins (a partial file is fine). Context-length tiers (`tiers: [{above: N, ...}]`) are priced per call.
 
-Model ids from third-party gateways are matched onto a table key by three layers: `patterns:` glob rules in `pricing.yaml` (explicit override, first match wins), then an exact chain that strips `[1m]` cache suffixes, dot versions and proxy prefixes/suffixes in any combination (`newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`), then a token fuzzy match that requires the same version token (`v3` requests never borrow `v4` prices). Unmatched ids use the default block and are logged with `CCS_DEBUG=1`.
+Model ids from third-party gateways are matched onto a table key by three layers: `patterns:` glob rules in `pricing.yaml` (explicit override, first match wins), then an exact chain that strips `[1m]` cache suffixes, dot versions and proxy prefixes/suffixes in any combination (`newapi/deepseek-v4-flash-v2` → `deepseek-v4-flash`), then a [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) `token_set_ratio` match over keys whose tokens all appear in the id (a key carrying a version the id lacks, or a different generation, is rejected — `v3` requests never borrow `v4` prices). Unmatched ids use the default block and are logged with `CCS_DEBUG=1`.
 
 All prices in **CNY (¥)** per million tokens.
 

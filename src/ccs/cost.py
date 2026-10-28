@@ -60,6 +60,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 import yaml
+from rapidfuzz import fuzz, process
 
 from . import catalog
 
@@ -121,6 +122,11 @@ _SETTING_KEYS = frozenset({
     "providers", "patterns", "fx_rates",
     "base_currency", "display_currency", "default_currency",
 })
+
+# rapidfuzz token_set_ratio 下限。实测：token 子集过滤后，正确匹配最低 50
+# （`relay-MiniMax-M3-20250101` → MiniMax-M3），而无关 id 在过滤阶段已全空，
+# 因此 50 只拦「部分 token 撞上但明显不是同一模型」的情况。
+_FUZZY_CUTOFF = 50.0
 
 # 带这些键的 YAML 条目表达了 models.dev 无法表达的信息（原生币种、峰谷、
 # 自定义分档），同一候选 id 下优先于 models.dev。
@@ -301,12 +307,6 @@ def _version_tokens(tokens: tuple[str, ...]) -> frozenset[str]:
     return frozenset(t for t in tokens if _VERSION_TOKEN_RE.fullmatch(t))
 
 
-def _is_subsequence(needle: tuple[str, ...], haystack: tuple[str, ...]) -> bool:
-    """True when ``needle`` appears in ``haystack`` in order (gaps allowed)."""
-    it = iter(haystack)
-    return all(tok in it for tok in needle)
-
-
 def _named_entries(pricing: dict):
     """Yield ``(key, entry, tier)`` for every priceable id, tier 0 = pinned.
 
@@ -376,36 +376,43 @@ def _pattern_match(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
 
 
 def _fuzzy_match(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
-    """Token-level match: the table key's tokens must appear in the id in order.
+    """Last-resort match scored by rapidfuzz over token-compatible table keys.
 
-    Handles vendor prefixes, reseller suffixes and version stamps in any
-    combination (``newapi/deepseek-v4-flash-v2`` → ``deepseek-v4-flash``).
-    Most specific key wins (most tokens); ties fall back to the pinned →
-    catalog → plain-YAML precedence. A key carrying a version token that the
-    id does not carry is rejected, and so is a key with a *different* version
-    (``v3`` vs ``v4``) — different generations sit at different prices.
+    Two filters, then a score:
+
+    1. **Token subset** — every token of the table key must appear in the id
+       (order-free, so ``deepseek_v4_flash`` and ``deepseek.v4.flash`` work).
+       This is what keeps extensions out: a ``claude-opus-4-1`` key cannot
+       absorb a ``claude-opus-4`` request.
+    2. **Version veto** — a key carrying a version token the id lacks is
+       rejected, and so is a different generation (``v3`` vs ``v4``): those
+       sit at different prices.
+    3. ``fuzz.token_set_ratio`` (rapidfuzz) ranks the survivors, so gateway
+       prefixes/suffixes and separator spelling only move the score, not the
+       filter outcome. Below ``_FUZZY_CUTOFF`` nothing is returned.
     """
     want = _tokens(model_id)
     if len(want) < 2:
         return None
-    want_versions = _version_tokens(want)
-    best: tuple[tuple[int, int], str, dict, bool] | None = None
+    want_set, want_versions = set(want), _version_tokens(want)
+    pool: dict[str, tuple[dict, int]] = {}
     for key, entry, tier in _named_entries(pricing):
         have = _tokens(key)
-        if len(have) < 2 or len(have) > len(want):
+        if len(have) < 2 or not set(have) <= want_set:
             continue
         have_versions = _version_tokens(have)
         if have_versions and not have_versions <= want_versions:
             continue
-        if not _is_subsequence(have, want):
-            continue
-        rank = (-len(have), tier)
-        if best is None or rank < best[0]:
-            best = (rank, key, entry, tier == 1)
+        pool.setdefault(key, (entry, tier))
+    if not pool:
+        return None
+    best = process.extractOne(model_id, pool.keys(), scorer=fuzz.token_set_ratio,
+                              score_cutoff=_FUZZY_CUTOFF)
     if best is None:
         return None
-    _debug_match(model_id, best[1], "fuzzy")
-    return best[2], best[3]
+    _debug_match(model_id, best[0], "fuzzy")
+    entry, tier = pool[best[0]]
+    return entry, tier == 1
 
 
 def _select_entry(model_id: str, pricing: dict) -> tuple[dict, bool] | None:
