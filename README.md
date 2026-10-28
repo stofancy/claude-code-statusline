@@ -229,31 +229,36 @@ Model ids from third-party gateways are matched onto a table key by three layers
 
 Currency rule: a model **is priced from its renminbi block whenever one exists** (`prices.CNY`; entries no longer declare a `currency`, the block used decides the symbol), and USD is the fallback for models without a CNY price; USD-priced models are converted into the display currency via `fx_rates`.
 
-All prices in **CNY (¥)** per million tokens.
+Prices below are the **official list prices, verified 2026-10-28**, per million tokens, in each vendor's
+own currency (¥ native CNY where published, $ otherwise). USD-priced models are
+FX-converted at display time; CNY-priced models never are.
 
-| Provider | Model | Input | Cache Hit | Cache Write | Output |
-|----------|-------|-------|-----------|-------------|--------|
-| DeepSeek | V4-Pro (2.5× off) | 3.00 | 0.025 | — | 6.00 |
-| DeepSeek | V4-Flash | 1.00 | 0.02 | — | 2.00 |
-| DeepSeek | R1 | 4.00 | 0.25 | — | 16.00 |
-| Anthropic | Opus 4.7 | 107.73 | 10.77 | 215.46 | 538.65 |
-| Anthropic | Sonnet 4.6 | 21.55 | 2.15 | 43.09 | 107.73 |
-| Anthropic | Haiku 4.5 | 7.18 | 0.72 | 14.37 | 35.91 |
-| OpenAI | GPT-4o | 17.95 | 8.98 | — | 71.80 |
-| OpenAI | GPT-4o-mini | 1.08 | 0.54 | — | 4.31 |
-| OpenAI | GPT-5 | 8.98 | 1.80 | — | 71.80 |
-| Google | Gemini 2.5 Pro | 8.98 | 0.89 | — | 35.91 |
-| Google | Gemini 2.5 Flash | 1.08 | 0.11 | — | 4.31 |
-| Zhipu (GLM) | GLM-5.2 / 5.1 | 8.00 | 2.00 | free | 28.00 |
-| Zhipu (GLM) | GLM-4.7 | 4.00 | 0.80 | free | 16.00 |
-| Zhipu (GLM) | GLM-4.5-Air | 1.20 | 0.24 | free | 8.00 |
-| Zhipu (GLM) | GLM-4.7-Flash | free | free | free | free |
+| Provider | Model | Input | Cache hit | Output | Currency |
+|----------|-------|-------|-----------|--------|----------|
+| DeepSeek | `deepseek-flash` (peak; off-peak is half) | 2.00 | 0.04 | 8.00 | ¥ |
+| DeepSeek | `deepseek-v4-pro` (peak; off-peak is half) | 9.00 | 0.30 | 27.00 | ¥ |
+| Anthropic | `claude-opus-5` / `claude-opus-4-8` | 5.00 | 0.50 | 25.00 | $ |
+| Anthropic | `claude-sonnet-5` | 2.00 | 0.20 | 10.00 | $ |
+| Anthropic | `claude-haiku-4-5` | 1.00 | 0.10 | 5.00 | $ |
+| OpenAI | `gpt-5` | 1.25 | 0.125 | 10.00 | $ |
+| OpenAI | `gpt-5-6-sol` (promo ≥ 2026-11-21; >272k doubles) | 4.00 | 0.40 | 20.00 | $ |
+| Google | `gemini-2.5-pro` (>200k: 2× input, 1.5× output) | 1.25 | 0.125 | 10.00 | $ |
+| Google | `gemini-2.5-flash` | 0.30 | 0.03 | 2.50 | $ |
+| xAI | `grok-4.6` (>200k doubles) | 2.00 | 0.50 | 6.00 | $ |
+| Zhipu | `glm-5.2` | 8.00 | 2.00 | 28.00 | ¥ |
+| Zhipu | `glm-4.7` (≥32k input tier) | 4.00 | 0.80 | 16.00 | ¥ |
+| MiniMax | `MiniMax-M3` (permanent 50%-off; >512k doubles) | 2.10 | 0.42 | 8.40 | ¥ |
+| MiniMax | `MiniMax-M3.1-Flash` | 1.00 | 0.10 | 4.00 | ¥ |
+| MiMo | `mimo-v2.6-pro` | 3.00 | 0.025 | 6.00 | ¥ |
+| MiMo | `mimo-v2.6-flash` | 1.00 | 0.02 | 2.00 | ¥ |
 
-DeepSeek V4-Pro 2.5× discount valid until 2026/05/31 23:59 Beijing time. Update `pricing.yaml` when it changes.
-
-GLM list prices are tiered by input length; the table records the `≥32k` tier. Cache writes are promotionally free across the GLM line, and GLM-4.7-Flash is fully free. See the `zhipu` block in `pricing.yaml` for exact per-tier values.
-
-If you use USD-based providers, convert their prices to CNY and override via user pricing file, or set `default_currency: USD` and update provider prices accordingly.
+DeepSeek peak hours are Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time (01:00–04:00,
+06:00–10:00 UTC), excluding Chinese public holidays; off-peak is half price and is
+selected per call. GLM cache writes are currently free; GLM list prices are tiered by
+input length and the table records the high tier. Models no longer on the vendor's
+pricing page (e.g. `deepseek-chat`, `deepseek-r1`, MiniMax M2 series, MiMo V2.5) keep
+their last known price for historical transcripts — see the per-vendor comments in
+`pricing.yaml`.
 
 ## Documentation
 

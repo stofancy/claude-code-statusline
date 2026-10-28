@@ -56,10 +56,10 @@ def write_user_pricing(text):
     ("claude-haiku-4.5", "$0.610"),
     ("claude-sonnet-5", "$1.22"),                         # $2/$10 已转为标准价
     ("opencode/claude-sonnet-4-6", "$1.83"),
-    ("gpt-5.6-sol", "$3.55"),
-    ("gpt-5-6-sol", "$3.55"),
-    ("gpt-5.6-sol[1m]", "$3.55"),
-    ("openrouter/gpt-5.6-sol", "$3.55"),
+    ("gpt-5.6-sol", "$2.44"),
+    ("gpt-5-6-sol", "$2.44"),
+    ("gpt-5.6-sol[1m]", "$2.44"),
+    ("openrouter/gpt-5.6-sol", "$2.44"),
     ("grok-4.6", "$0.850"),
     ("grok-4.5", "$0.830"),
     ("grok-4.5-build", "$0.830"),                        # 尾段剥离回到点号键
@@ -80,8 +80,9 @@ def test_anthropic_1h_cache_write_is_2x_input(usd):
 
 @pytest.mark.parametrize("model_id, expected", [
     # 人民币原生价：无论显示币种，都以 ¥ 显示原价
-    ("weihub/glm-5.2", "¥3.76"),
-    ("weihub/kimi-k2.7-code", "¥3.48"),
+    ("glm-5.2", "¥3.80"),
+    ("MiniMax-M3.1-Flash", "¥0.510"),
+    ("mimo-v2.6-pro", "¥0.903"),
 ])
 def test_builtin_cny_native_models(usd, model_id, expected):
     assert last_cost(model_id, **U) == expected
@@ -93,7 +94,7 @@ def test_builtin_cny_native_models(usd, model_id, expected):
     ("deepseek-v4-pro", "2026-08-15T02:00:00Z", "¥3.63"),    # 高峰 [1,4)
     ("deepseek-v4-pro", "2026-08-15T08:00:00Z", "¥3.63"),    # 高峰 [6,10)
     ("deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),    # 空闲
-    ("deepseek-v4-flash", "2026-08-15T10:00:00Z", "¥0.605"), # 10 点是空闲（半开区间）
+    ("deepseek-v4-flash", "2026-08-15T10:00:00Z", "¥0.502"), # 10 点是空闲（半开区间）
     ("openrouter/deepseek/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
     ("openrouter/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
     ("opencode-go/deepseek-v4-pro", "2026-08-15T05:30:00Z", "¥1.82"),
@@ -108,8 +109,8 @@ def test_tide_mixed_calls_priced_individually():
         "deepseek-v4-pro": [("2026-08-15T02:00:00Z", one_m), ("2026-08-15T05:30:00Z", one_m)],
         "deepseek-v4-flash": [("2026-08-15T05:30:00Z", one_m)],
     }
-    # 9 + 4.5 + 1.5
-    assert cost_mod.fmt_cost_multi({}, primary_model_id="deepseek-v4-pro", model_calls=calls) == "¥15.00"
+    # 9 + 4.5 + 1（Flash 空闲价已由 1.5 调整为 1.0）
+    assert cost_mod.fmt_cost_multi({}, primary_model_id="deepseek-v4-pro", model_calls=calls) == "¥14.50"
 
 
 # ── 上下文长度分档 ────────────────────────────────────────────────────────
@@ -179,12 +180,13 @@ def test_user_entry_shadows_proxy_prefix_match(usd):
 @pytest.mark.parametrize("model_id, expected", [
     ("glm-5.2", "¥3.80"),                       # 点号形式的键
     ("zai/glm-5.2", "¥3.80"),                   # 前缀剥离必须保留点号形式，否则落到目录价
-    ("newapi/deepseek-v4-flash-v2", "¥1.21"),   # 前缀 + 版本后缀组合
-    ("deepseek-v4-flash-newapi", "¥1.21"),      # 仅后缀
-    ("openrouter/deepseek/deepseek-v4-flash", "¥1.21"),
+    ("newapi/deepseek-v4-flash-v2", "¥1.00"),   # 前缀 + 版本后缀组合
+    ("deepseek-v4-flash-newapi", "¥1.00"),      # 仅后缀
+    ("openrouter/deepseek/deepseek-v4-flash", "¥1.00"),
     ("openrouter/deepseek/deepseek-chat-v3", "¥1.05"),  # 前缀 + 版本，旧链会落到默认价
-    ("newapi/deepseek_v4_flash", "¥1.21"),      # 下划线拼写：仅 token 模糊匹配可达
-    ("newapi/deepseek.v4.flash", "¥1.21"),      # 点号分隔：同上
+    ("newapi/deepseek_v4_flash", "¥1.00"),      # 下划线拼写：仅 token 模糊匹配可达
+    ("newapi/deepseek.v4.flash", "¥1.00"),      # 点号分隔：同上
+    ("weihub/kimi-k2.7-code", "¥3.69"),         # 转售条目已废弃，前缀剥离后走官方价
 ])
 def test_variant_ids_match_base_model(model_id, expected):
     assert last_cost(model_id, **U) == expected
@@ -195,7 +197,7 @@ def test_version_veto_blocks_cross_generation(usd):
     write_user_pricing(
         "providers:\n  mine:\n    myvllm-deepseek-v3-flash:\n      input_per_1m: 100\n      output_per_1m: 0\n"
     )
-    assert last_cost("newapi/myvllm-deepseek-v4-flash-preview", **U) == "¥1.21"
+    assert last_cost("newapi/myvllm-deepseek-v4-flash-preview", **U) == "¥1.00"
     # 同代则命中该用户条目（前缀 + 后缀都被吃掉，仅剩版本区分）
     assert last_cost("newapi/myvllm-deepseek-v3-flash-preview", input=100_000) == "$10.00"
 

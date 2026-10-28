@@ -1,6 +1,7 @@
 # Claude Code Statusline — Multi-Provider Pricing Table
 #
-# Verified against official sources on 2026-05-12 (Anthropic Opus 5 added 2026-07-24):
+# Verified against official sources on 2026-10-28（逐家重核；本轮修正 DeepSeek Flash、
+# gpt-5、gpt-5.6-sol 的过期价，补入 deepseek-flash / mimo-v2.6 系列）：
 #   • Anthropic: https://platform.claude.com/docs/en/docs/about-claude/pricing
 #   • DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 #   • OpenAI:    https://openai.com/api/pricing/
@@ -230,30 +231,57 @@ providers:
             input_cache_hit_per_1m: 0.022
             output_per_1m: 1.98
 
+    # 官方当前模型名（模型版本 DeepSeek-V4.1-Flash-1017）。官方页同时给出
+    # CNY 与 USD 两套标价（各自标定，非汇率换算），故两套都按原文录入。
+    deepseek-flash:
+      tide:
+        peak_hours_utc: [[1, 4], [6, 10]]
+      prices:
+        CNY:
+          peak:
+            input_per_1m: 2.0
+            input_cache_hit_per_1m: 0.04
+            output_per_1m: 8.0
+          off_peak:
+            input_per_1m: 1.0
+            input_cache_hit_per_1m: 0.02
+            output_per_1m: 4.0
+        USD:
+          peak:
+            input_per_1m: 0.30
+            input_cache_hit_per_1m: 0.006
+            output_per_1m: 1.20
+          off_peak:
+            input_per_1m: 0.15
+            input_cache_hit_per_1m: 0.003
+            output_per_1m: 0.60
+
+    # 旧名：官方注明仍可调用，但模型已下线，请求由 deepseek-flash 承接、按 Flash 价计费。
     deepseek-v4-flash:
       tide:
         peak_hours_utc: [[1, 4], [6, 10]]
       prices:
         CNY:
           peak:
-            input_per_1m: 3.0
-            input_cache_hit_per_1m: 0.10
-            output_per_1m: 9.0
+            input_per_1m: 2.0
+            input_cache_hit_per_1m: 0.04
+            output_per_1m: 8.0
           off_peak:
-            input_per_1m: 1.5
-            input_cache_hit_per_1m: 0.05
-            output_per_1m: 4.5
+            input_per_1m: 1.0
+            input_cache_hit_per_1m: 0.02
+            output_per_1m: 4.0
         USD:
           peak:
-            input_per_1m: 0.44
-            input_cache_hit_per_1m: 0.014
-            output_per_1m: 1.32
+            input_per_1m: 0.30
+            input_cache_hit_per_1m: 0.006
+            output_per_1m: 1.20
           off_peak:
-            input_per_1m: 0.22
-            input_cache_hit_per_1m: 0.007
-            output_per_1m: 0.66
+            input_per_1m: 0.15
+            input_cache_hit_per_1m: 0.003
+            output_per_1m: 0.60
 
-    # Legacy names — being phased out per official docs, kept for back-compat.
+    # Legacy names — 官方价页自 2026-10-28 起已不列这两个模型（deepseek-chat /
+    # deepseek-r1），下列数值为最后已知价，仅用于历史 transcript 计价。
     deepseek-chat:
       input_per_1m: 0.279
       input_cache_hit_per_1m: 0.0696
@@ -269,9 +297,9 @@ providers:
   # ─────────────────────────────────────────────────────────────────────────
   openai:
     gpt-5:
-      input_per_1m: 0.625
+      input_per_1m: 1.25
       cache_read_per_1m: 0.125
-      output_per_1m: 5.00
+      output_per_1m: 10.00
 
     gpt-5-mini:
       input_per_1m: 0.25
@@ -294,18 +322,22 @@ providers:
       input_per_1m: 30.00
       output_per_1m: 180.00
 
-    # gpt-5.6 系列（sol/terra/luna）分档计价：短上下文（Standard）与长上下文。
-    # 与本段其它 gpt-5.x 条目一致，此处记录短上下文档（Standard）。
-    # gpt-5.6-sol 长上下文档为 input $10 / cached $1 / cache_write $12.50 /
-    # output $45——若你的会话长期超过分档阈值，改用长上下文档数值。
+    # gpt-5.6-sol：官方标注当前为促销价，有效期「至少到 2026-11-21」，
+    # 到期后可能回调（回调值官方未给）。>272k prompt 走 tiers（约 2 倍）。
     # 键用连字符形式 gpt-5-6-sol，配合 cost._resolve_price 的点号归一
     # （gpt-5.6-sol → gpt-5-6-sol）、代理前缀剥离与 [1m] 后缀剥离，
     # 覆盖 proxy/gpt-5.6-sol、gpt-5.6-sol[1m] 等非官方变体。
     gpt-5-6-sol:
-      input_per_1m: 5.00
-      cache_read_per_1m: 0.50
-      cache_write_per_1m: 6.25
-      output_per_1m: 30.00
+      input_per_1m: 4.00
+      cache_read_per_1m: 0.40
+      cache_write_per_1m: 5.00
+      output_per_1m: 20.00
+      tiers:
+        - above: 272000
+          input_per_1m: 8.00
+          cache_read_per_1m: 0.80
+          cache_write_per_1m: 10.00
+          output_per_1m: 30.00
 
     gpt-4o:
       input_per_1m: 2.50
@@ -370,10 +402,47 @@ providers:
   # (CNY-first rule). USD equivalents are reproduced under `prices.USD`
   # as the fallback for models without a CNY block.
   # https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go
-  # V2.5 pricing effective 2026-05-27. Cache write is free (promotional).
-  # V2-pro / V2-omni will be redirected to V2.5 from 2026-06-01, sunset 2026-06-30.
+  # 2026-10-28 复核：官方定价页只剩 V2.6 系列（v2.6-pro / v2.6-flash /
+  # v2.6-pro-ultraspeed）；v2.5-pro 与 v2.5 已于 2026-10-21 10:00 下线，
+  # v2-pro / v2-omni / v2-flash 已无价格行。下列 V2.5/V2 条目保留为历史价，
+  # 现价见 v2.6 条目。缓存写入限时免费。Batch 推理为实时价的一半。
   # ─────────────────────────────────────────────────────────────────────────
   mimo:
+    # 现售型号（官方 2026-10-21 更新后的价格表）。
+    mimo-v2.6-pro:
+      prices:
+        CNY:
+          input_per_1m: 3.00
+          input_cache_hit_per_1m: 0.025
+          output_per_1m: 6.00
+        USD:
+          input_per_1m: 0.435
+          input_cache_hit_per_1m: 0.0036
+          output_per_1m: 0.87
+
+    mimo-v2.6-flash:
+      prices:
+        CNY:
+          input_per_1m: 1.00
+          input_cache_hit_per_1m: 0.02
+          output_per_1m: 2.00
+        USD:
+          input_per_1m: 0.14
+          input_cache_hit_per_1m: 0.0028
+          output_per_1m: 0.28
+
+    mimo-v2.6-pro-ultraspeed:
+      prices:
+        CNY:
+          input_per_1m: 30.00
+          input_cache_hit_per_1m: 0.25
+          output_per_1m: 60.00
+        USD:
+          input_per_1m: 4.35
+          input_cache_hit_per_1m: 0.036
+          output_per_1m: 8.70
+
+    # ── 以下为已下线/已无价格行的历史型号，数值为最后已知价 ──
     mimo-v2.5-pro:
       prices:
         CNY:
@@ -430,29 +499,20 @@ providers:
           output_per_1m: 0.30
 
   # ─────────────────────────────────────────────────────────────────────────
-  # MiniMax — list price is published in CNY (元) per 1M tokens. Authored
-  # here in CNY under `prices.CNY` (CNY-first rule: no FX rounding, the
-  # status line shows ¥ as published). USD equivalents are reproduced
-  # under `prices.USD` for users whose
-  # `display_currency` is USD — they pick up the precise USD value when
-  # one is published, and fall back to the CNY block + FX otherwise.
+  # MiniMax — list price published in CNY (元) per 1M tokens, recorded here
+  # under `prices.CNY` so the CNY-first rule bills in ¥ as published. USD
+  # values reproduce the page's own USD table where it publishes one.
   # Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
   #
-  # Rounding policy: CNY values rounded to 2 decimal places (1 分); USD
-  # equivalents rounded to 4 decimal places. The forward and reverse
-  # conversions agree to within 0.5 分 (e.g. 2.10 CNY / 7.18 = 0.2925 USD).
+  # 2026-10-28 复核：官方按量计费页现在只剩 MiniMax-M3 与 MiniMax-M3.1-Flash。
+  # M2 系列（M2/M2.1/M2.5/M2.7 及各自 HightSpeed）已不在价页 —— 下列条目为
+  # 最后已知价，仅用于历史 transcript 计价。
   #
-  # Model IDs match the verbatim strings returned by api.minimaxi.com
-  # (PascalCase, with the platform's "HightSpeed" spelling). The `[1m]`
-  # suffix used by the 1-hour-cache variant is stripped automatically by
-  # cost._resolve_price before lookup, so MiniMax-M3[1m] resolves to
-  # MiniMax-M3.
+  # M3 的 5 折是官方标注的「永久五折」（不是限时促销）；>512k 输入为 ≤512k
+  # 的 2 倍（用 tiers 表达）；service_tier=priority 为标准价的 1.5 倍（请求
+  # 参数切换，表内不建模）。M3/M3.1-Flash 的缓存写入价官方未发布，故不计费。
   #
-  # M3 pricing is the ≤512k input tier, 7-day limited 50% promotional price
-  # (matches the page's bold/current numbers; standard rate is 2× the promo).
-  # The page also publishes a >512k tier (4× these rates) gated behind a
-  # quota and not modeled here. M3 cache_write is not published and is
-  # therefore not billed.
+  # Rounding policy: CNY 保留 2 位小数（1 分）；USD 保留 4 位小数。
   # ─────────────────────────────────────────────────────────────────────────
   minimax:
     MiniMax-M2:
@@ -556,6 +616,18 @@ providers:
           input_per_1m: 0.2925
           input_cache_hit_per_1m: 0.0585
           output_per_1m: 1.1699
+      tiers:
+        - above: 512000
+          input_per_1m: 4.20
+          input_cache_hit_per_1m: 0.84
+          output_per_1m: 16.80
+
+    MiniMax-M3.1-Flash:
+      prices:
+        CNY:
+          input_per_1m: 1.00
+          input_cache_hit_per_1m: 0.10
+          output_per_1m: 4.00
 
   # ─────────────────────────────────────────────────────────────────────────
   # Zhipu BigModel (GLM series) — list price published in CNY (元) per 1M
@@ -674,48 +746,18 @@ providers:
           output_per_1m: 0.0
 
   # ─────────────────────────────────────────────────────────────────────────
-  # WeiHub — proxy models routed through the WeiHub gateway. Model IDs carry
-  # a ``weihub/`` prefix in the transcript (e.g. ``weihub/glm-5.2``). Prices
-  # are aligned with Alibaba Cloud Bailian (百炼) for the same upstream models.
-  # Source: https://help.aliyun.com/zh/model-studio/billing (verified 2026-07-02)
-  #
-  # Keys use the full prefixed ID (``weihub/glm-5.2``) rather than the bare
-  # model name. Background: ``_resolve_price`` strips ``/``-delimited proxy
-  # prefixes, but only on the dot-normalized form — ``weihub/glm-5.2`` is
-  # first dot-normalised to ``weihub/glm-5-2``, then prefix-stripped to
-  # ``glm-5-2`` (dashes). That dash-form candidate never matches the dot-form
-  # key ``glm-5.2`` under ``zhipu``, so the model would fall through to
-  # ``_DEFAULT_PRICING`` (≈10× under-count). Using the full prefixed ID as
-  # the key matches on the first candidate (exact original) before any
-  # normalisation is applied.
-  #
-  # GLM-5.2: Bailian flat pricing (不区分阶梯, 非思考和思考模式),
-  # input ¥8 / output ¥28 per 1M tokens. Implicit context-cache hit is 20%
-  # of input (¥1.60), per Bailian's context-cache discount table.
-  #
-  # Kimi-K2.7-Code: Bailian input ¥6.5 / output ¥27 per 1M tokens (仅思考模式).
-  # The model supports context cache (上下文缓存 享有折扣); implicit cache hit
-  # uses Bailian's 20% discount rate (¥1.30 = 6.5 × 0.20).
+  # Moonshot / Kimi — published in USD per 1M tokens.
+  # Source: https://platform.kimi.ai/docs/pricing/chat (verified 2026-10-28)
+  # K2 系列只公布 cached input，不单列 cache write；K2 系列将于 2026 年底退役。
+  # 这里只收 kimi-k2.7-code 系列——原经第三方转售条目计价的模型，改用官方价。
   # ─────────────────────────────────────────────────────────────────────────
-  weihub:
-    weihub/glm-5.2:
-      prices:
-        CNY:
-          input_per_1m: 8.00
-          input_cache_hit_per_1m: 1.60
-          output_per_1m: 28.00
-        USD:
-          input_per_1m: 1.1142
-          input_cache_hit_per_1m: 0.2228
-          output_per_1m: 3.8997
+  moonshot:
+    kimi-k2.7-code:
+      input_per_1m: 0.95
+      cache_read_per_1m: 0.19
+      output_per_1m: 4.00
 
-    weihub/kimi-k2.7-code:
-      prices:
-        CNY:
-          input_per_1m: 6.50
-          input_cache_hit_per_1m: 1.30
-          output_per_1m: 27.00
-        USD:
-          input_per_1m: 0.9053
-          input_cache_hit_per_1m: 0.1811
-          output_per_1m: 3.7587
+    kimi-k2.7-code-highspeed:
+      input_per_1m: 1.90
+      cache_read_per_1m: 0.38
+      output_per_1m: 8.00
